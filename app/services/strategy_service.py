@@ -24,6 +24,10 @@ Write a short strategy brief (5-8 sentences) that:
 - Names 1-2 concrete roster-construction priorities specific to THIS league's rules \
 (e.g. how PPR and the flex/bench setup should shape when to draft each position) — not \
 generic advice that ignores the settings given.
+- When referencing roster slot counts, use the exact figures from the settings given \
+verbatim — do not recompute, combine, or approximate them into a different number (e.g. \
+"2 RB, 2 WR, 1 TE, and 1 RB/WR/TE flex" are four separate line items, not "three RB/WR/TE \
+starting spots" or any other invented total).
 - If a draft slot and pick list are provided, reason about pick position explicitly — e.g. \
 whether to expect a run on a scarce position before the next pick comes back around, or \
 whether the gap between consecutive picks favors reaching for a positional need now vs. \
@@ -64,6 +68,11 @@ class StrategyService:
         self._research_service = research_service
 
     def get_strategy(self, year: int) -> StrategyBrief | None:
+        cache_key = f"strategy_{year}"
+        cached = self._store.load(cache_key, StrategyBrief)
+        if cached is not None:
+            return cached
+
         league = self._store.load(f"league_{year}", League)
         if league is None or league.settings is None:
             return None
@@ -86,12 +95,14 @@ class StrategyService:
 
         narrative = self._synthesize(settings_summary, retro, material_news, scoring_change_note, draft_slot, pick_numbers)
 
-        return StrategyBrief(
+        brief = StrategyBrief(
             year=year,
             league_settings_summary=settings_summary,
             narrative=narrative,
             draft_slot=draft_slot,
         )
+        self._store.save(cache_key, brief)
+        return brief
 
     def _synthesize(self, settings_summary, retro, material_news, scoring_change_note, draft_slot, pick_numbers) -> str:
         lines = [f"This season's league settings: {settings_summary}"]

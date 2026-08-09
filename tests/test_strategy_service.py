@@ -6,14 +6,14 @@ from app.services.strategy_service import StrategyService, _snake_picks
 
 
 class FakeStore:
-    def __init__(self, leagues: dict[str, League]):
-        self._leagues = leagues
+    def __init__(self, data: dict[str, object] | None = None):
+        self._data = dict(data or {})
 
     def save(self, key, model):
-        raise AssertionError("strategy service should not write")
+        self._data[key] = model
 
     def load(self, key, model_cls):
-        return self._leagues.get(key)
+        return self._data.get(key)
 
 
 class FakeLLM(LLMAdapter):
@@ -203,6 +203,25 @@ def test_get_strategy_no_scoring_change_note_when_ppr_unchanged():
     service.get_strategy(2026)
 
     assert "SCORING FORMAT CHANGE" not in llm.last_messages[1]["content"]
+
+
+def test_get_strategy_caches_brief_and_does_not_call_llm_again():
+    league = make_league_with_settings()
+    llm = FakeLLM()
+    store = FakeStore({"league_2026": league})
+    service = StrategyService(store, llm, FakeRetrospectiveService(retro=make_retro()), FakeResearchService())
+
+    first = service.get_strategy(2026)
+    second = service.get_strategy(2026)
+
+    assert store.load("strategy_2026", None) is not None
+    assert second == first
+    # LLM should only have been asked once — the second call served from cache.
+    assert llm.last_messages is not None
+    llm.last_messages = None
+    third = service.get_strategy(2026)
+    assert llm.last_messages is None
+    assert third == first
 
 
 def test_snake_picks_computes_correct_pick_numbers_for_slot_8_of_12():
