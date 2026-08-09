@@ -44,9 +44,20 @@ class Transaction(BaseModel):
     player: Player | None = None
 
 
+class LeagueSettings(BaseModel):
+    team_count: int
+    scoring_type: str
+    points_per_reception: float
+    playoff_team_count: int
+    keeper_count: int
+    # Non-zero starting-roster slots only, e.g. {"QB": 1, "RB": 2, "BE": 4}
+    position_slot_counts: dict[str, int]
+
+
 class League(BaseModel):
     espn_id: int
     year: int
     name: str
     teams: list[Team]
     draft: list[DraftPick] = []
+    settings: LeagueSettings | None = None

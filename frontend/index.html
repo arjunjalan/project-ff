@@ -44,6 +44,14 @@
   <button id="load-retro">Load retrospective</button>
   <div id="retro"></div>
 
+  <hr />
+
+  <h2>Draft strategy brief</h2>
+  <p>Synthesizes league rules, last season's retrospective, and current news into targets and roster-construction guidance.</p>
+  <label>Draft year: <input id="strategy-year" type="number" value="2026" /></label>
+  <button id="load-strategy">Load strategy brief</button>
+  <div id="strategy"></div>
+
   <script>
     const statusEl = document.getElementById("status");
     const outputEl = document.getElementById("output");
@@ -128,6 +136,28 @@
         `;
       } catch (e) {
         retroEl.textContent = "Error: " + e;
+      }
+    });
+
+    const strategyEl = document.getElementById("strategy");
+    const strategyYearEl = document.getElementById("strategy-year");
+
+    document.getElementById("load-strategy").addEventListener("click", async () => {
+      strategyEl.textContent = "loading… (can take a minute)";
+      try {
+        const r = await fetch(`/strategy/${strategyYearEl.value}`);
+        if (!r.ok) {
+          const err = await r.json();
+          strategyEl.textContent = "Error: " + err.detail;
+          return;
+        }
+        const brief = await r.json();
+        strategyEl.innerHTML = `
+          <p><em>${brief.league_settings_summary}</em></p>
+          <div class="narrative">${brief.narrative}</div>
+        `;
+      } catch (e) {
+        strategyEl.textContent = "Error: " + e;
       }
     });
   </script>

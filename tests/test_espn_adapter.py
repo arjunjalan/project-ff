@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.adapters.espn import _to_draft_pick, _to_player, _to_team
+from app.adapters.espn import _to_draft_pick, _to_league_settings, _to_player, _to_team
 
 
 def fake_player(espn_id=1, name="Bijan Robinson", position="RB", pro_team="ATL", total_points=0):
@@ -82,3 +82,28 @@ def test_to_draft_pick_falls_back_when_player_not_in_lookup():
     result = _to_draft_pick(pick, player_lookup={})
     assert result.player.position == ""
     assert result.player.name == "Traded Away Guy"
+
+
+def fake_settings(ppr=1.0):
+    return SimpleNamespace(
+        team_count=12,
+        scoring_type="H2H_POINTS",
+        scoring_format=[{"abbr": "REC", "points": ppr}, {"abbr": "RTD", "points": 6.0}],
+        playoff_team_count=6,
+        keeper_count=0,
+        position_slot_counts={"QB": 1, "RB": 2, "BE": 4, "IR": 1, "": 0, "TQB": 0},
+    )
+
+
+def test_to_league_settings_extracts_ppr_and_nonzero_slots():
+    settings = _to_league_settings(fake_settings(ppr=1.0))
+    assert settings.points_per_reception == 1.0
+    assert settings.position_slot_counts == {"QB": 1, "RB": 2, "BE": 4, "IR": 1}
+    assert settings.team_count == 12
+
+
+def test_to_league_settings_defaults_ppr_when_missing():
+    espn_settings = fake_settings()
+    espn_settings.scoring_format = [{"abbr": "RTD", "points": 6.0}]
+    settings = _to_league_settings(espn_settings)
+    assert settings.points_per_reception == 0.0

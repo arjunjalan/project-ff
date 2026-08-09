@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.routers import health, league, research, retrospective
+from app.routers import health, league, research, retrospective, strategy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,5 +26,6 @@ app.include_router(health.router)
 app.include_router(league.router)
 app.include_router(research.router)
 app.include_router(retrospective.router)
+app.include_router(strategy.router)
 
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

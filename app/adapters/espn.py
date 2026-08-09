@@ -1,6 +1,6 @@
 from espn_api.football import League as EspnLeagueClient
 
-from app.models.league import DraftPick, League, Player, Team
+from app.models.league import DraftPick, League, LeagueSettings, Player, Team
 
 
 class EspnAdapter:
@@ -26,6 +26,7 @@ class EspnAdapter:
             name=client.settings.name,
             teams=teams,
             draft=[_to_draft_pick(p, player_lookup) for p in client.draft],
+            settings=_to_league_settings(client.settings),
         )
 
 
@@ -55,6 +56,22 @@ def _to_team(espn_team, swid: str) -> Team:
         points_against=espn_team.points_against,
         final_standing=espn_team.final_standing or None,
         roster=[_to_player(p) for p in espn_team.roster],
+    )
+
+
+def _to_league_settings(espn_settings) -> LeagueSettings:
+    ppr = next(
+        (row["points"] for row in espn_settings.scoring_format if row.get("abbr") == "REC"),
+        0.0,
+    )
+    slots = {k: v for k, v in espn_settings.position_slot_counts.items() if v and k}
+    return LeagueSettings(
+        team_count=espn_settings.team_count,
+        scoring_type=espn_settings.scoring_type,
+        points_per_reception=ppr,
+        playoff_team_count=espn_settings.playoff_team_count,
+        keeper_count=espn_settings.keeper_count,
+        position_slot_counts=slots,
     )
 
 

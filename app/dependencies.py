@@ -8,6 +8,7 @@ from app.config import settings
 from app.services.league_service import LeagueService
 from app.services.research_service import ResearchService
 from app.services.retrospective_service import RetrospectiveService
+from app.services.strategy_service import StrategyService
 from app.storage.json_store import JsonStore
 from app.storage.store import Store
 
@@ -44,3 +45,13 @@ def get_research_service() -> ResearchService:
 @lru_cache
 def get_retrospective_service() -> RetrospectiveService:
     return RetrospectiveService(get_store(), get_llm_adapter())
+
+
+@lru_cache
+def get_strategy_service() -> StrategyService:
+    return StrategyService(
+        get_store(),
+        get_llm_adapter(),
+        get_retrospective_service(),
+        get_research_service(),
+    )
