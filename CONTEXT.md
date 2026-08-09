@@ -47,6 +47,13 @@ H4 (live draft helper) is still the hard deadline — Sep 3, 2026 — and is uns
 
 ## Session Notes
 
+### 2026-08-09 — Scoring-format context in retrospective + strategy (commit `e901cc8`)
+- Arjun noted 2025 was non-PPR. Checked: our synced data already had this exactly right (`data/league_2025.json` settings: `points_per_reception: 0.0`; `data/league_2026.json`: `1.0`) — no data bug this time, unlike the weekly-performance issue above. The gap was that neither service *used* the scoring context.
+- Extracted `summarize_settings()` out of `strategy_service.py` into `app/services/league_settings_summary.py` — was about to be duplicated between retrospective and strategy, pulled it out first.
+- `RetrospectiveService._narrate()` now includes that season's actual scoring rules in the prompt, with an instruction not to misjudge a pick's production without accounting for the format (e.g. a low receiver total under non-PPR isn't necessarily a bad pick).
+- `StrategyService` now loads the *prior* year's league too (previously only loaded the current year) and explicitly flags in the prompt when points-per-reception changed year-over-year — with an instruction that position-value lessons from the retrospective don't automatically transfer across a scoring-format change (PPR raises WR/pass-catcher value structurally, so "avoid early WRs" from a non-PPR season needs re-checking, not blind carry-forward).
+- Regenerated `data/retrospective_2025.json` again (second regen this session — first was for the weekly-performance fix above, this one for the scoring-context addition). If a fresh session encounters a retrospective/strategy narrative that seems to be missing scoring-format reasoning, check whether the cached file predates this commit.
+
 ### 2026-08-09 — Weekly performance breakdown, fixes a real retrospective bug (commit `c88a85a`)
 - Arjun tested the deployed retrospective himself and caught it: Davante Adams showed as a 0-point "bust" despite being a full-season starter, and CeeDee Lamb's injury weeks (benched 3–6, per box scores — though ESPN's `injuryStatus` field stayed "ACTIVE" throughout in this historical data, doesn't reliably reflect real injury designations retroactively) weren't visible anywhere.
 - Root cause, verified directly against the live API: `Team.roster` for a `League(year=2025, ...)` call reflects the *current* (Aug 2026) roster attached to that team, not a frozen end-of-season snapshot. Anyone since moved off the roster is invisible to the roster pull entirely — the earlier "0 pts, blank position for traded/dropped players" caveat was actually a real, systemic bug, not a rare edge case.
