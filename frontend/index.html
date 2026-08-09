@@ -8,6 +8,13 @@
     button { font: inherit; padding: 0.4rem 0.8rem; margin-right: 0.5rem; }
     pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; white-space: pre-wrap; }
     #status { font-weight: bold; }
+    hr { margin: 2rem 0; }
+    .item { border-bottom: 1px solid #eee; padding: 0.75rem 0; }
+    .item.material { border-left: 3px solid #c0392b; padding-left: 0.75rem; }
+    .item .title { font-weight: 600; }
+    .item .reason { color: #555; font-size: 0.9em; }
+    .badge { font-size: 0.75em; padding: 0.1rem 0.4rem; border-radius: 3px; background: #eee; }
+    .badge.material { background: #c0392b; color: white; }
   </style>
 </head>
 <body>
@@ -19,6 +26,13 @@
   <button id="view">View league</button>
 
   <pre id="output"></pre>
+
+  <hr />
+
+  <h2>Research feed</h2>
+  <p>Materiality-filtered NFL news — reasoning shown for every call.</p>
+  <button id="load-feed">Load feed</button>
+  <div id="feed"></div>
 
   <script>
     const statusEl = document.getElementById("status");
@@ -47,6 +61,28 @@
 
     document.getElementById("view").addEventListener("click", () => {
       showResult(fetch(`/league/${yearEl.value}`));
+    });
+
+    const feedEl = document.getElementById("feed");
+
+    document.getElementById("load-feed").addEventListener("click", async () => {
+      feedEl.textContent = "loading…";
+      try {
+        const r = await fetch("/research/feed");
+        const assessments = await r.json();
+        feedEl.innerHTML = assessments
+          .map(
+            (a) => `
+          <div class="item ${a.material ? "material" : ""}">
+            <span class="badge ${a.material ? "material" : ""}">${a.material ? "MATERIAL" : "routine"}</span>
+            <div class="title"><a href="${a.item.link}" target="_blank">${a.item.title}</a></div>
+            <div class="reason">${a.reason}</div>
+          </div>`
+          )
+          .join("");
+      } catch (e) {
+        feedEl.textContent = "Error: " + e;
+      }
     });
   </script>
 </body>
