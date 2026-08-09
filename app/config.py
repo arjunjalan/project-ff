@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     data_dir: str = "data"
     cors_origins: str = "http://localhost:8000"
     openrouter_api_key: str
-    llm_model: str = "openrouter/free"
+    llm_model: str = "openrouter/auto"
+    llm_fallback_model: str = "openai/gpt-oss-20b:free"
 
 
 settings = Settings()

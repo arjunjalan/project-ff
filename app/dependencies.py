@@ -22,5 +22,9 @@ def get_league_service() -> LeagueService:
 
 @lru_cache
 def get_research_service() -> ResearchService:
-    llm = OpenRouterAdapter(api_key=settings.openrouter_api_key, model=settings.llm_model)
+    llm = OpenRouterAdapter(
+        api_key=settings.openrouter_api_key,
+        model=settings.llm_model,
+        fallback_model=settings.llm_fallback_model,
+    )
     return ResearchService(EspnRssAdapter(), llm)
