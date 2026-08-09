@@ -1,22 +1,34 @@
 from app.adapters.llm import LLMAdapter
-from app.models.league import League
+from app.models.league import League, LeagueSettings
 from app.models.strategy import StrategyBrief
 from app.services.league_settings_summary import summarize_settings
 from app.services.research_service import ResearchService
 from app.services.retrospective_service import RetrospectiveService
 from app.storage.store import Store
 
+# Arjun's draft slot per season (1-indexed, snake draft) — no ESPN field carries this
+# (it's assigned live at draft time), so it's tracked here by hand. Add next year's
+# entry once the slot is known; omitted years just get a brief with no pick-position
+# reasoning.
+_DRAFT_SLOTS: dict[int, int] = {2026: 8}
+
 _SYSTEM_PROMPT = """You're a fantasy football advisor building a personal draft strategy \
 brief for a manager, ahead of their upcoming draft. You'll get: this league's actual \
-scoring/roster rules, a retrospective narrative on the manager's own last-season draft (if \
-available) plus that retrospective's raw position-by-position breakdown (points and rate \
-aggregated per position — the same numbers the retrospective itself used, not a re-summary \
-of it), and current materiality-filtered NFL news (if available).
+scoring/roster rules, the manager's own draft slot and upcoming pick numbers (if known), \
+a retrospective narrative on the manager's own last-season draft (if available) plus that \
+retrospective's raw position-by-position breakdown (points and rate aggregated per position \
+— the same numbers the retrospective itself used, not a re-summary of it), and current \
+materiality-filtered NFL news (if available).
 
 Write a short strategy brief (5-8 sentences) that:
 - Names 1-2 concrete roster-construction priorities specific to THIS league's rules \
 (e.g. how PPR and the flex/bench setup should shape when to draft each position) — not \
 generic advice that ignores the settings given.
+- If a draft slot and pick list are provided, reason about pick position explicitly — e.g. \
+whether to expect a run on a scarce position before the next pick comes back around, or \
+whether the gap between consecutive picks favors reaching for a positional need now vs. \
+waiting. Don't just restate the pick numbers without using them to shape a recommendation. \
+If no draft slot is provided, don't invent one or assume a specific pick position.
 - If a position breakdown is provided, use the actual numbers in it to justify at least one \
 recommendation directly (e.g. "RB returned only ~11.6 pts/started-week on early picks last \
 year against QB's ~25.8 — don't assume more early RB investment fixes that without a reason \
@@ -69,12 +81,28 @@ class StrategyService:
         news = self._research_service.get_materiality_feed(limit=15)
         material_news = [a for a in news if a.material]
 
-        narrative = self._synthesize(settings_summary, retro, material_news, scoring_change_note)
+        draft_slot = _DRAFT_SLOTS.get(year)
+        pick_numbers = _snake_picks(draft_slot, league.settings) if draft_slot else None
 
-        return StrategyBrief(year=year, league_settings_summary=settings_summary, narrative=narrative)
+        narrative = self._synthesize(settings_summary, retro, material_news, scoring_change_note, draft_slot, pick_numbers)
 
-    def _synthesize(self, settings_summary, retro, material_news, scoring_change_note) -> str:
+        return StrategyBrief(
+            year=year,
+            league_settings_summary=settings_summary,
+            narrative=narrative,
+            draft_slot=draft_slot,
+        )
+
+    def _synthesize(self, settings_summary, retro, material_news, scoring_change_note, draft_slot, pick_numbers) -> str:
         lines = [f"This season's league settings: {settings_summary}"]
+
+        if draft_slot:
+            lines.append(
+                f"\nManager's draft slot: {draft_slot}. Upcoming picks (snake draft): "
+                f"{', '.join(str(p) for p in pick_numbers)}."
+            )
+        else:
+            lines.append("\nNo draft slot recorded for this season — omit pick-position reasoning.")
 
         if scoring_change_note:
             lines.append(f"\nSCORING FORMAT CHANGE: {scoring_change_note}")
@@ -102,6 +130,16 @@ class StrategyService:
             ]
         )
         return result.text
+
+
+def _snake_picks(draft_slot: int, settings: LeagueSettings) -> list[int]:
+    team_count = settings.team_count
+    rounds = sum(settings.position_slot_counts.values())
+    picks = []
+    for r in range(1, rounds + 1):
+        slot_in_round = draft_slot if r % 2 == 1 else team_count - draft_slot + 1
+        picks.append((r - 1) * team_count + slot_in_round)
+    return picks
 
 
 def _scoring_change_note(prior_league: League | None, current_league: League) -> str | None:

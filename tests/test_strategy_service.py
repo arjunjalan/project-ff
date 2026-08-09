@@ -2,7 +2,7 @@ from app.adapters.llm import LLMAdapter, LLMResult
 from app.models.league import League, LeagueSettings, Team
 from app.models.news import MaterialityAssessment, NewsItem
 from app.models.retrospective import TeamRetrospective
-from app.services.strategy_service import StrategyService
+from app.services.strategy_service import StrategyService, _snake_picks
 
 
 class FakeStore:
@@ -203,6 +203,47 @@ def test_get_strategy_no_scoring_change_note_when_ppr_unchanged():
     service.get_strategy(2026)
 
     assert "SCORING FORMAT CHANGE" not in llm.last_messages[1]["content"]
+
+
+def test_snake_picks_computes_correct_pick_numbers_for_slot_8_of_12():
+    settings = LeagueSettings(
+        team_count=12,
+        scoring_type="H2H_POINTS",
+        points_per_reception=1.0,
+        playoff_team_count=6,
+        keeper_count=0,
+        position_slot_counts={"QB": 1, "RB": 2, "WR": 2, "BE": 4},
+    )
+
+    assert _snake_picks(8, settings) == [8, 17, 32, 41, 56, 65, 80, 89, 104]
+
+
+def test_get_strategy_includes_recorded_draft_slot_in_brief_and_prompt():
+    league = make_league_with_settings()
+    llm = FakeLLM()
+    service = StrategyService(
+        FakeStore({"league_2026": league}), llm, FakeRetrospectiveService(retro=make_retro()), FakeResearchService()
+    )
+
+    brief = service.get_strategy(2026)
+
+    assert brief.draft_slot == 8
+    user_content = llm.last_messages[1]["content"]
+    assert "draft slot: 8" in user_content
+    assert "8, 17, 32" in user_content
+
+
+def test_get_strategy_omits_draft_slot_for_year_without_a_recorded_slot():
+    league = make_league(2027, ppr=1.0)
+    llm = FakeLLM()
+    service = StrategyService(
+        FakeStore({"league_2027": league}), llm, FakeRetrospectiveService(retro=make_retro()), FakeResearchService()
+    )
+
+    brief = service.get_strategy(2027)
+
+    assert brief.draft_slot is None
+    assert "No draft slot recorded" in llm.last_messages[1]["content"]
 
 
 def test_get_strategy_no_scoring_change_note_when_prior_league_missing():

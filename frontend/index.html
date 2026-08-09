@@ -170,8 +170,12 @@
           return;
         }
         const brief = await r.json();
+        const slotLine = brief.draft_slot
+          ? `<p><em>Draft slot: ${brief.draft_slot}</em></p>`
+          : "";
         strategyEl.innerHTML = `
           <p><em>${brief.league_settings_summary}</em></p>
+          ${slotLine}
           <div class="narrative">${renderNarrative(brief.narrative)}</div>
         `;
       } catch (e) {
