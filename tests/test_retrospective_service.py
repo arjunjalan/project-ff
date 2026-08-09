@@ -3,7 +3,7 @@ import pytest
 from app.adapters.llm import LLMAdapter, LLMResult
 from app.models.league import DraftPick, League, LeagueSettings, Player, Team, WeeklyPerformance
 from app.models.retrospective import TeamRetrospective
-from app.services.retrospective_service import RetrospectiveService, _pick_line
+from app.services.retrospective_service import RetrospectiveService, _pick_line, _position_breakdown
 
 
 class FakeStore:
@@ -219,6 +219,70 @@ def test_get_retrospective_uses_cache_and_never_calls_llm():
     result = service.get_retrospective(2025)
 
     assert result.narrative == "cached narrative"
+
+
+def test_narrative_prompt_tags_picks_as_early_or_late_round():
+    league = make_league()
+    llm = FakeLLM()
+    service = RetrospectiveService(FakeStore({"league_2025": league}), llm)
+
+    service.get_retrospective(2025)
+
+    user_content = llm.last_messages[1]["content"]
+    # my picks are rounds 1, 3, 10 -> max_round=10, midpoint=5.0
+    assert "Round 1, Pick 1 (early-round)" in user_content
+    assert "Round 3, Pick 1 (early-round)" in user_content
+    assert "Round 10, Pick 5 (late-round)" in user_content
+
+
+def test_narrative_prompt_includes_position_breakdown_section():
+    league = make_league()
+    llm = FakeLLM()
+    service = RetrospectiveService(FakeStore({"league_2025": league}), llm)
+
+    service.get_retrospective(2025)
+
+    user_content = llm.last_messages[1]["content"]
+    assert "Position breakdown" in user_content
+    assert "RB: 1 pick(s), 50.0 pts total" in user_content
+    assert "WR: 1 pick(s), 200.0 pts total" in user_content
+    assert "Unknown: 1 pick(s)" in user_content
+
+
+def test_position_breakdown_aggregates_multiple_picks_at_same_position():
+    picks = [
+        DraftPick(
+            round_num=1,
+            round_pick=1,
+            team_espn_id=1,
+            team_name="T",
+            player=Player(espn_id=1, name="RB1", position="RB", total_points=100, weekly=weekly(10, 10.0)),
+        ),
+        DraftPick(
+            round_num=5,
+            round_pick=1,
+            team_espn_id=1,
+            team_name="T",
+            player=Player(espn_id=2, name="RB2", position="RB", total_points=50, weekly=weekly(5, 10.0)),
+        ),
+    ]
+    lines = _position_breakdown(picks)
+    assert len(lines) == 1
+    assert "RB: 2 pick(s), 150.0 pts total, 15 started-weeks, ~10.0 pts/started-week" in lines[0]
+
+
+def test_position_breakdown_handles_zero_started_weeks_without_division_error():
+    picks = [
+        DraftPick(
+            round_num=1,
+            round_pick=1,
+            team_espn_id=1,
+            team_name="T",
+            player=Player(espn_id=1, name="Ghost", position="WR", total_points=0, weekly=[]),
+        ),
+    ]
+    lines = _position_breakdown(picks)
+    assert "WR: 1 pick(s), 0.0 pts total, 0 started-weeks, ~0.0 pts/started-week" in lines[0]
 
 
 def test_get_retrospective_second_call_hits_cache_not_llm():
