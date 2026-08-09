@@ -1,10 +1,17 @@
+import json
 import logging
 
 from espn_api.football import League as EspnLeagueClient
 
-from app.models.league import DraftPick, League, LeagueSettings, Player, Team, WeeklyPerformance
+from app.models.league import DraftPick, League, LeagueSettings, Player, PositionRanking, Team, WeeklyPerformance
 
 logger = logging.getLogger(__name__)
+
+# ESPN's internal lineup-slot IDs for each position we rank (from
+# espn_api.football.constant.POSITION_MAP) — used to query the league-wide
+# player pool by position via the same authenticated request client espn-api
+# itself uses (not a scraped/undocumented path).
+_POSITION_SLOT_IDS = {"QB": 0, "RB": 2, "WR": 4, "TE": 6, "D/ST": 16, "K": 17}
 
 
 class EspnAdapter:
@@ -38,6 +45,7 @@ class EspnAdapter:
             teams=teams,
             draft=[_to_draft_pick(p, player_lookup) for p in client.draft],
             settings=_to_league_settings(client.settings),
+            positional_rankings=_fetch_positional_rankings(client, year),
         )
 
 
@@ -84,6 +92,53 @@ def _to_league_settings(espn_settings) -> LeagueSettings:
         keeper_count=espn_settings.keeper_count,
         position_slot_counts=slots,
     )
+
+
+def _fetch_positional_rankings(client, year: int) -> dict[str, list[PositionRanking]]:
+    """Season-long positional finish, under this league's own scoring rules.
+
+    Reuses espn_api's own authenticated request client (client.espn_request)
+    with a broader filter than its built-in free_agents() — that method only
+    returns *unrostered* players, which excludes most of the players anyone
+    actually drafted. This queries the same underlying endpoint for the full
+    rostered+free-agent pool at each position, sorted by season point total.
+    """
+    stat_id = f"00{year}"
+    result: dict[str, list[PositionRanking]] = {}
+
+    for position, slot_id in _POSITION_SLOT_IDS.items():
+        try:
+            params = {"view": "kona_player_info", "scoringPeriodId": client.finalScoringPeriod}
+            filters = {
+                "players": {
+                    "filterSlotIds": {"value": [slot_id]},
+                    "limit": 60,
+                    "sortAppliedStatTotal": {"sortAsc": False, "sortPriority": 1, "value": stat_id},
+                }
+            }
+            headers = {"x-fantasy-filter": json.dumps(filters)}
+            data = client.espn_request.league_get(params=params, headers=headers)
+        except Exception:
+            logger.warning("Failed to fetch positional rankings for %s", position, exc_info=True)
+            continue
+
+        entries = []
+        for row in data.get("players", []):
+            info = row.get("player", {})
+            total = next(
+                (s.get("appliedTotal", 0.0) for s in info.get("stats", []) if s.get("id") == stat_id),
+                0.0,
+            )
+            entries.append((info.get("id"), info.get("fullName", ""), total))
+
+        entries.sort(key=lambda e: e[2], reverse=True)
+        result[position] = [
+            PositionRanking(espn_id=espn_id, name=name, points=points, rank=i + 1)
+            for i, (espn_id, name, points) in enumerate(entries)
+            if espn_id is not None
+        ]
+
+    return result
 
 
 def _enrich_with_weekly_performance(client, my_team_espn_id: int, player_lookup: dict[int, Player]) -> None:

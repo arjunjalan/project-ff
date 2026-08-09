@@ -11,3 +11,7 @@ class TeamRetrospective(BaseModel):
     final_standing: int | None
     picks: list[DraftPick]
     narrative: str
+    # Raw per-position aggregates (points + rate), same data the retrospective's
+    # own LLM call used — passed through as-is to StrategyService so it isn't
+    # working from a lossy re-summary of a summary.
+    position_breakdown: list[str] = []

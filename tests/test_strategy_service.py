@@ -57,9 +57,16 @@ def make_league_with_settings():
     return League(espn_id=1, year=2026, name="Test League", teams=[], draft=[], settings=settings)
 
 
-def make_retro():
+def make_retro(position_breakdown=None):
     return TeamRetrospective(
-        team_name="Shiznits", year=2025, wins=8, losses=6, final_standing=5, picks=[], narrative="drafted RBs too early"
+        team_name="Shiznits",
+        year=2025,
+        wins=8,
+        losses=6,
+        final_standing=5,
+        picks=[],
+        narrative="drafted RBs too early",
+        position_breakdown=position_breakdown or [],
     )
 
 
@@ -95,6 +102,31 @@ def test_get_strategy_includes_settings_retro_and_material_news_in_prompt():
     assert "drafted RBs too early" in user_content
     assert "Star RB traded" in user_content
     assert brief.narrative == "a strategy narrative"
+
+
+def test_get_strategy_includes_raw_position_breakdown_when_available():
+    league = make_league_with_settings()
+    llm = FakeLLM()
+    retro = make_retro(position_breakdown=["RB: 4 pick(s), 350.0 pts total, 30 started-weeks, ~11.6 pts/started-week"])
+    retro_service = FakeRetrospectiveService(retro=retro)
+    service = StrategyService(FakeStore({"league_2026": league}), llm, retro_service, FakeResearchService())
+
+    service.get_strategy(2026)
+
+    user_content = llm.last_messages[1]["content"]
+    assert "position-by-position breakdown" in user_content
+    assert "~11.6 pts/started-week" in user_content
+
+
+def test_get_strategy_omits_position_breakdown_section_when_empty():
+    league = make_league_with_settings()
+    llm = FakeLLM()
+    retro_service = FakeRetrospectiveService(retro=make_retro(position_breakdown=[]))
+    service = StrategyService(FakeStore({"league_2026": league}), llm, retro_service, FakeResearchService())
+
+    service.get_strategy(2026)
+
+    assert "position-by-position breakdown" not in llm.last_messages[1]["content"]
 
 
 def test_get_strategy_handles_missing_retrospective_gracefully():

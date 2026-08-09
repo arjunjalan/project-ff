@@ -70,6 +70,15 @@ class LeagueSettings(BaseModel):
     position_slot_counts: dict[str, int]
 
 
+class PositionRanking(BaseModel):
+    espn_id: int
+    name: str
+    points: float
+    # 1-indexed finish among all rostered+free-agent players at this
+    # position, under this league's own scoring settings, for the season.
+    rank: int
+
+
 class League(BaseModel):
     espn_id: int
     year: int
@@ -77,3 +86,5 @@ class League(BaseModel):
     teams: list[Team]
     draft: list[DraftPick] = []
     settings: LeagueSettings | None = None
+    # Keyed by position ("QB", "RB", "WR", "TE", "D/ST", "K") — see EspnAdapter.
+    positional_rankings: dict[str, list[PositionRanking]] = {}

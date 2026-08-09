@@ -1,9 +1,15 @@
 import pytest
 
 from app.adapters.llm import LLMAdapter, LLMResult
-from app.models.league import DraftPick, League, LeagueSettings, Player, Team, WeeklyPerformance
+from app.models.league import DraftPick, League, LeagueSettings, Player, PositionRanking, Team, WeeklyPerformance
 from app.models.retrospective import TeamRetrospective
-from app.services.retrospective_service import RetrospectiveService, _pick_line, _position_breakdown
+from app.services.retrospective_service import (
+    RetrospectiveService,
+    _assign_roles,
+    _pick_line,
+    _position_breakdown,
+    _tier_line,
+)
 
 
 class FakeStore:
@@ -283,6 +289,114 @@ def test_position_breakdown_handles_zero_started_weeks_without_division_error():
     ]
     lines = _position_breakdown(picks)
     assert "WR: 1 pick(s), 0.0 pts total, 0 started-weeks, ~0.0 pts/started-week" in lines[0]
+
+
+def draft_pick(espn_id, position, weekly_data=None, total_points=0, round_num=1, round_pick=1):
+    return DraftPick(
+        round_num=round_num,
+        round_pick=round_pick,
+        team_espn_id=1,
+        team_name="My Team",
+        player=Player(
+            espn_id=espn_id, name=f"P{espn_id}", position=position, total_points=total_points, weekly=weekly_data or []
+        ),
+    )
+
+
+def test_assign_roles_ranks_two_rbs_by_weeks_started_in_dedicated_slot():
+    rb1 = draft_pick(1, "RB", weekly(10, 10.0, slot="RB"))
+    rb2 = draft_pick(2, "RB", weekly(5, 8.0, slot="RB"))
+    roles = _assign_roles([rb1, rb2])
+    assert roles[1] == "RB1"
+    assert roles[2] == "RB2"
+
+
+def test_assign_roles_assigns_flex_to_player_with_most_flex_weeks():
+    rb_dedicated = draft_pick(1, "RB", weekly(10, 10.0, slot="RB"))
+    rb_flex = draft_pick(2, "RB", weekly(8, 9.0, slot="RB/WR/TE"))
+    roles = _assign_roles([rb_dedicated, rb_flex])
+    assert roles[2] == "FLEX"
+    assert roles[1] == "RB1"
+
+
+def test_assign_roles_marks_never_started_as_bench():
+    p = draft_pick(1, "QB", weekly(10, 5.0, slot="BE"))
+    roles = _assign_roles([p])
+    assert roles[1] == "BENCH"
+
+
+def test_assign_roles_single_slot_position_gets_direct_label():
+    p = draft_pick(1, "QB", weekly(10, 20.0, slot="QB"))
+    roles = _assign_roles([p])
+    assert roles[1] == "QB"
+
+
+def test_assign_roles_third_rb_becomes_bench():
+    rb1 = draft_pick(1, "RB", weekly(10, 10.0, slot="RB"))
+    rb2 = draft_pick(2, "RB", weekly(10, 9.0, slot="RB"))
+    rb3 = draft_pick(3, "RB", weekly(10, 8.0, slot="RB"))
+    roles = _assign_roles([rb1, rb2, rb3])
+    assert roles[1] == "RB1"
+    assert roles[2] == "RB2"
+    assert roles[3] == "BENCH"
+
+
+def test_tier_line_cleared_bar():
+    pick = draft_pick(1, "QB", total_points=300)
+    rankings = {"QB": [PositionRanking(espn_id=1, name="P1", points=300, rank=2)]}
+    line = _tier_line(pick, "QB", rankings)
+    assert "CLEARED" in line
+    assert "#2" in line
+
+
+def test_tier_line_missed_bar():
+    pick = draft_pick(1, "WR", total_points=100)
+    rankings = {"WR": [PositionRanking(espn_id=1, name="P1", points=100, rank=20)]}
+    line = _tier_line(pick, "WR1", rankings)
+    assert "MISSED" in line
+    assert "top-5" in line
+
+
+def test_tier_line_flex_uses_flex_threshold_by_real_position():
+    pick = draft_pick(1, "TE", total_points=100)
+    rankings = {"TE": [PositionRanking(espn_id=1, name="P1", points=100, rank=9)]}
+    line = _tier_line(pick, "FLEX", rankings)
+    assert "CLEARED" in line
+    assert "top-10" in line
+
+
+def test_tier_line_bench_role_has_no_tier():
+    pick = draft_pick(1, "RB")
+    line = _tier_line(pick, "BENCH", {})
+    assert "no positional tier applies" in line
+
+
+def test_tier_line_none_role_has_no_tier():
+    pick = draft_pick(1, "RB")
+    line = _tier_line(pick, None, {})
+    assert "no positional tier applies" in line
+
+
+def test_tier_line_missing_ranking_data_is_graceful():
+    pick = draft_pick(1, "RB")
+    line = _tier_line(pick, "RB1", {})
+    assert "unavailable" in line
+
+
+def test_narrative_prompt_includes_tier_verdicts_when_rankings_available():
+    league = make_league()
+    league.positional_rankings = {
+        "RB": [PositionRanking(espn_id=10, name="Star Bust", points=50, rank=40)],
+        "WR": [PositionRanking(espn_id=11, name="Late Steal", points=200, rank=3)],
+    }
+    llm = FakeLLM()
+    service = RetrospectiveService(FakeStore({"league_2025": league}), llm)
+
+    service.get_retrospective(2025)
+
+    user_content = llm.last_messages[1]["content"]
+    assert "CLEARED" in user_content or "MISSED" in user_content
+    assert "role:" in user_content
 
 
 def test_get_retrospective_second_call_hits_cache_not_llm():

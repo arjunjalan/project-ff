@@ -1,6 +1,13 @@
 from types import SimpleNamespace
 
-from app.adapters.espn import _enrich_with_weekly_performance, _to_draft_pick, _to_league_settings, _to_player, _to_team
+from app.adapters.espn import (
+    _enrich_with_weekly_performance,
+    _fetch_positional_rankings,
+    _to_draft_pick,
+    _to_league_settings,
+    _to_player,
+    _to_team,
+)
 from app.models.league import Player
 
 
@@ -191,3 +198,65 @@ def test_enrich_continues_past_a_week_that_errors():
 
     assert lookup[10].total_points == 5.0
     assert [w.week for w in lookup[10].weekly] == [2]
+
+
+def fake_player_row(espn_id, name, points, stat_id="002025"):
+    return {"player": {"id": espn_id, "fullName": name, "stats": [{"id": stat_id, "appliedTotal": points}]}}
+
+
+def test_fetch_positional_rankings_sorts_by_points_and_assigns_rank():
+    client = SimpleNamespace(
+        finalScoringPeriod=17,
+        espn_request=SimpleNamespace(
+            league_get=lambda params, headers: {
+                "players": [
+                    fake_player_row(1, "Low", 50.0),
+                    fake_player_row(2, "High", 300.0),
+                    fake_player_row(3, "Mid", 150.0),
+                ]
+            }
+        ),
+    )
+    result = _fetch_positional_rankings(client, 2025)
+
+    qb = result["QB"]
+    assert [r.name for r in qb] == ["High", "Mid", "Low"]
+    assert [r.rank for r in qb] == [1, 2, 3]
+    assert set(result.keys()) == {"QB", "RB", "WR", "TE", "D/ST", "K"}
+
+
+def test_fetch_positional_rankings_continues_past_a_position_that_errors():
+    calls = {"n": 0}
+
+    def league_get(params, headers):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("ESPN hiccup")
+        return {"players": [fake_player_row(1, "X", 10.0)]}
+
+    client = SimpleNamespace(finalScoringPeriod=17, espn_request=SimpleNamespace(league_get=league_get))
+    result = _fetch_positional_rankings(client, 2025)
+
+    assert len(result) == 5  # one of the 6 positions failed
+    assert calls["n"] == 6
+
+
+def test_fetch_positional_rankings_uses_year_specific_stat_id():
+    client = SimpleNamespace(
+        finalScoringPeriod=17,
+        espn_request=SimpleNamespace(
+            league_get=lambda params, headers: {
+                "players": [
+                    fake_player_row(1, "Wrong Year", 999.0, stat_id="002024"),
+                    fake_player_row(2, "Right Year", 42.0, stat_id="002025"),
+                ]
+            }
+        ),
+    )
+    result = _fetch_positional_rankings(client, 2025)
+
+    assert len(result["QB"]) == 2
+    assert result["QB"][0].name == "Right Year"
+    assert result["QB"][0].points == 42.0
+    # "Wrong Year" has no matching stat entry, so its points default to 0.0
+    assert result["QB"][1].points == 0.0

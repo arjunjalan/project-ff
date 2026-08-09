@@ -8,15 +8,25 @@ from app.storage.store import Store
 
 _SYSTEM_PROMPT = """You're a fantasy football advisor building a personal draft strategy \
 brief for a manager, ahead of their upcoming draft. You'll get: this league's actual \
-scoring/roster rules, a retrospective on the manager's own last-season draft (if \
-available), and current materiality-filtered NFL news (if available).
+scoring/roster rules, a retrospective narrative on the manager's own last-season draft (if \
+available) plus that retrospective's raw position-by-position breakdown (points and rate \
+aggregated per position — the same numbers the retrospective itself used, not a re-summary \
+of it), and current materiality-filtered NFL news (if available).
 
 Write a short strategy brief (5-8 sentences) that:
 - Names 1-2 concrete roster-construction priorities specific to THIS league's rules \
 (e.g. how PPR and the flex/bench setup should shape when to draft each position) — not \
 generic advice that ignores the settings given.
-- If a retrospective is provided, explicitly carries forward 1-2 lessons from it (e.g. \
-"last year you drafted RBs too early relative to how they scored — this year...").
+- If a position breakdown is provided, use the actual numbers in it to justify at least one \
+recommendation directly (e.g. "RB returned only ~11.6 pts/started-week on early picks last \
+year against QB's ~25.8 — don't assume more early RB investment fixes that without a reason \
+to expect this year's RB pool differs"). Don't just gesture at "roster construction lessons" \
+in the abstract when you have real numbers to cite.
+- If a retrospective narrative is provided, carry forward 1-2 lessons from it — but distinguish \
+lessons about genuine value picks (late-round players who outproduced their slot — those \
+patterns are worth hunting for again) from lessons about early-round investments that simply \
+paid off (those aren't a repeatable "value" strategy, they're a scarcity/certainty bet — say so \
+if the narrative frames it that way).
 - If the scoring format changed between last season and this one (flagged explicitly in \
 the input if so), say plainly which retrospective lessons about position value still \
 apply and which don't transfer directly — e.g. a non-PPR-to-PPR change raises WR/pass-\
@@ -72,6 +82,9 @@ class StrategyService:
         if retro is not None:
             lines.append(f"\nLast season's retrospective ({retro.team_name}, {retro.wins}-{retro.losses}):")
             lines.append(retro.narrative)
+            if retro.position_breakdown:
+                lines.append("\nLast season's position-by-position breakdown (raw numbers, not the narrative's summary of them):")
+                lines.extend(retro.position_breakdown)
         else:
             lines.append("\nNo retrospective available (prior season not synced).")
 
