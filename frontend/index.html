@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>project-ff</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; }
+    button { font: inherit; padding: 0.4rem 0.8rem; margin-right: 0.5rem; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; white-space: pre-wrap; }
+    #status { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>project-ff</h1>
+  <p>Status: <span id="status">checking…</span></p>
+
+  <label>Year: <input id="year" type="number" value="2025" /></label>
+  <button id="sync">Sync league</button>
+  <button id="view">View league</button>
+
+  <pre id="output"></pre>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const outputEl = document.getElementById("output");
+    const yearEl = document.getElementById("year");
+
+    fetch("/health")
+      .then((r) => r.json())
+      .then((d) => (statusEl.textContent = d.status))
+      .catch(() => (statusEl.textContent = "unreachable"));
+
+    async function showResult(promise) {
+      outputEl.textContent = "loading…";
+      try {
+        const r = await promise;
+        const data = await r.json();
+        outputEl.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        outputEl.textContent = "Error: " + e;
+      }
+    }
+
+    document.getElementById("sync").addEventListener("click", () => {
+      showResult(fetch(`/league/${yearEl.value}/sync`, { method: "POST" }));
+    });
+
+    document.getElementById("view").addEventListener("click", () => {
+      showResult(fetch(`/league/${yearEl.value}`));
+    });
+  </script>
+</body>
+</html>
