@@ -1,15 +1,31 @@
 from pydantic import BaseModel
 
 
+class WeeklyPerformance(BaseModel):
+    week: int
+    points: float
+    # Starting lineup slot that week (e.g. "WR", "RB/WR/TE", "BE", "IR").
+    # "BE"/"IR" means benched/reserve that week, not absent from the roster.
+    slot: str
+
+
 class Player(BaseModel):
     espn_id: int
     name: str
     position: str
     pro_team: str | None = None
-    # 0 for a drafted player traded/dropped off the roster before season end
-    # (backfilled from final rosters — see EspnAdapter), not necessarily 0
-    # points actually scored. Don't read this as "this pick was a bust."
+    # Season total. For players still on the *current* live roster this
+    # comes straight from ESPN; for players who've since left (traded,
+    # dropped, cut in a later season) it's summed from `weekly` instead —
+    # see EspnAdapter. Prefer `weekly` for retrospective analysis: this
+    # season total doesn't distinguish "played well every week" from
+    # "played great for 8 weeks, then missed 6" — points-per-active-week
+    # does.
     total_points: float = 0
+    # Only populated for the requesting user's own team (see EspnAdapter) —
+    # per-week points/slot for every week the player was on that roster,
+    # even if they've since left it. Empty for every other team's players.
+    weekly: list[WeeklyPerformance] = []
 
 
 class DraftPick(BaseModel):

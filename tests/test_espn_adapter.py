@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
-from app.adapters.espn import _to_draft_pick, _to_league_settings, _to_player, _to_team
+from app.adapters.espn import _enrich_with_weekly_performance, _to_draft_pick, _to_league_settings, _to_player, _to_team
+from app.models.league import Player
 
 
 def fake_player(espn_id=1, name="Bijan Robinson", position="RB", pro_team="ATL", total_points=0):
@@ -107,3 +108,86 @@ def test_to_league_settings_defaults_ppr_when_missing():
     espn_settings.scoring_format = [{"abbr": "RTD", "points": 6.0}]
     settings = _to_league_settings(espn_settings)
     assert settings.points_per_reception == 0.0
+
+
+def fake_box_player(player_id, name="Box Player", points=10.0, slot="RB", position="RB", pro_team="ATL"):
+    return SimpleNamespace(
+        playerId=player_id, name=name, points=points, slot_position=slot, position=position, proTeam=pro_team
+    )
+
+
+def fake_matchup(home_id, away_id, home_lineup=None, away_lineup=None):
+    return SimpleNamespace(
+        home_team=SimpleNamespace(team_id=home_id) if home_id is not None else None,
+        away_team=SimpleNamespace(team_id=away_id) if away_id is not None else None,
+        home_lineup=home_lineup or [],
+        away_lineup=away_lineup or [],
+    )
+
+
+def fake_client(reg_season_count, box_scores_by_week):
+    return SimpleNamespace(
+        settings=SimpleNamespace(reg_season_count=reg_season_count),
+        box_scores=lambda week: box_scores_by_week.get(week, []),
+    )
+
+
+def test_enrich_adds_weekly_to_existing_roster_player():
+    lookup = {10: Player(espn_id=10, name="X", position="RB", pro_team="ATL", total_points=999)}
+    client = fake_client(
+        2,
+        {
+            1: [fake_matchup(1, 2, home_lineup=[fake_box_player(10, points=12.0, slot="RB")])],
+            2: [fake_matchup(1, 2, home_lineup=[fake_box_player(10, points=8.0, slot="BE")])],
+        },
+    )
+    _enrich_with_weekly_performance(client, my_team_espn_id=1, player_lookup=lookup)
+
+    assert [w.week for w in lookup[10].weekly] == [1, 2]
+    assert lookup[10].weekly[0].points == 12.0
+    assert lookup[10].weekly[1].slot == "BE"
+    assert lookup[10].total_points == 20.0  # recomputed from weekly, not the original 999
+
+
+def test_enrich_creates_entry_for_player_not_in_current_roster():
+    lookup: dict[int, Player] = {}
+    client = fake_client(
+        1, {1: [fake_matchup(1, 2, home_lineup=[fake_box_player(99, name="Departed Guy", points=15.0)])]}
+    )
+    _enrich_with_weekly_performance(client, my_team_espn_id=1, player_lookup=lookup)
+
+    assert 99 in lookup
+    assert lookup[99].name == "Departed Guy"
+    assert lookup[99].total_points == 15.0
+    assert len(lookup[99].weekly) == 1
+
+
+def test_enrich_uses_away_lineup_when_my_team_is_away():
+    lookup: dict[int, Player] = {}
+    client = fake_client(1, {1: [fake_matchup(2, 1, away_lineup=[fake_box_player(50, points=7.0)])]})
+    _enrich_with_weekly_performance(client, my_team_espn_id=1, player_lookup=lookup)
+
+    assert 50 in lookup
+    assert lookup[50].total_points == 7.0
+
+
+def test_enrich_ignores_matchups_not_involving_my_team():
+    lookup: dict[int, Player] = {}
+    client = fake_client(1, {1: [fake_matchup(2, 3, home_lineup=[fake_box_player(50, points=7.0)])]})
+    _enrich_with_weekly_performance(client, my_team_espn_id=1, player_lookup=lookup)
+
+    assert lookup == {}
+
+
+def test_enrich_continues_past_a_week_that_errors():
+    def box_scores(week):
+        if week == 1:
+            raise RuntimeError("ESPN hiccup")
+        return [fake_matchup(1, 2, home_lineup=[fake_box_player(10, points=5.0)])]
+
+    client = SimpleNamespace(settings=SimpleNamespace(reg_season_count=2), box_scores=box_scores)
+    lookup: dict[int, Player] = {}
+    _enrich_with_weekly_performance(client, my_team_espn_id=1, player_lookup=lookup)
+
+    assert lookup[10].total_points == 5.0
+    assert [w.week for w in lookup[10].weekly] == [2]

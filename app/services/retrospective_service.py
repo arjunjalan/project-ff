@@ -3,22 +3,28 @@ from app.models.league import DraftPick, League, Team
 from app.models.retrospective import TeamRetrospective
 from app.storage.store import Store
 
-_SYSTEM_PROMPT = """You're a fantasy football advisor helping a manager learn from last \
-season's draft. You'll get their team's record and every pick they made, with round, \
-pick number, player, position, and the fantasy points that player scored while on this \
-roster that season.
+_BENCH_SLOTS = {"BE", "IR"}
 
-IMPORTANT: a pick showing 0 points and a blank position means the player was traded or \
-dropped off this roster before the data was captured — it does NOT mean they scored zero \
-or were a bust. Never call a 0-point pick a "bust"; note it separately as "left the roster \
-mid-season, production unknown" if it's worth mentioning at all.
+_SYSTEM_PROMPT = """You're a fantasy football advisor helping a manager learn from last \
+season's draft. For each pick you'll get: round/pick, player, position, how many weeks of \
+the season they were on this specific roster, how many of those weeks they were started \
+(not benched/IR), their total points while on this roster, and their points-per-week rate \
+while started. Some picks are marked as never having appeared in a weekly lineup for this \
+team — for those, production on this roster is genuinely unknown; do not guess, do not call \
+them a bust, just note the pick and move on.
 
 Write a short retrospective (4-6 sentences) that:
-- Among picks with real point totals, names the single best-value pick (a late pick that \
-scored like an early one) and the single biggest bust (an early pick that scored like a \
-late one), citing round/pick and points.
-- Identifies 1-2 concrete roster-construction patterns worth repeating or avoiding next \
-draft (e.g. positions drafted too early/late relative to how they scored).
+- Judges value primarily by points-per-started-week rate, not season total — a full-season \
+starter and a 3-week rental with a similar total are very different outcomes, and the \
+retrospective should say so explicitly when it applies.
+- Names the single best-value pick (weigh both a strong rate AND meaningful weeks-started \
+coverage — a great rate over only 1-2 weeks is a small sample, not a proven value pick) and \
+the single biggest bust (an early pick with a weak rate despite being started regularly), \
+citing round/pick, weeks started, and the rate.
+- If a highly-drafted player was rostered most/all of the season but started only a fraction \
+of those weeks, call that out explicitly — it's a real signal (injury, poor performance, or a \
+roster crunch) distinct from the points-per-week rate alone.
+- Identifies 1-2 concrete roster-construction patterns worth repeating or avoiding next draft.
 
 Ground every claim in the specific picks/numbers given — no generic advice."""
 
@@ -67,10 +73,7 @@ class RetrospectiveService:
 
         lines = [f"Record: {team.wins}-{team.losses}, final standing {team.final_standing}"]
         for p in picks:
-            lines.append(
-                f"Round {p.round_num}, Pick {p.round_pick}: {p.player.name} "
-                f"({p.player.position}) — {p.player.total_points} pts"
-            )
+            lines.append(f"Round {p.round_num}, Pick {p.round_pick}: {p.player.name} ({p.player.position}) — {_pick_line(p)}")
         result = self._llm.chat(
             [
                 {"role": "system", "content": _SYSTEM_PROMPT},
@@ -78,3 +81,17 @@ class RetrospectiveService:
             ]
         )
         return result.text
+
+
+def _pick_line(pick: DraftPick) -> str:
+    weekly = pick.player.weekly
+    if not weekly:
+        return "never appeared in a weekly lineup for this team — production on this roster is unknown, likely cut/traded before Week 1"
+
+    weeks_started = [w for w in weekly if w.slot not in _BENCH_SLOTS]
+    total = pick.player.total_points
+    rate = total / len(weeks_started) if weeks_started else 0.0
+    return (
+        f"on roster {len(weekly)} of the season's weeks, started {len(weeks_started)} of them, "
+        f"{total:.1f} pts total (~{rate:.1f} pts/week while started)"
+    )

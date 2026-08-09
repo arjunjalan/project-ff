@@ -1,9 +1,9 @@
 import pytest
 
 from app.adapters.llm import LLMAdapter, LLMResult
-from app.models.league import DraftPick, League, Player, Team
+from app.models.league import DraftPick, League, Player, Team, WeeklyPerformance
 from app.models.retrospective import TeamRetrospective
-from app.services.retrospective_service import RetrospectiveService
+from app.services.retrospective_service import RetrospectiveService, _pick_line
 
 
 class FakeStore:
@@ -34,6 +34,10 @@ class ExplodingLLM(LLMAdapter):
         raise AssertionError("LLM should not be called when a cached retrospective exists")
 
 
+def weekly(count, points_each, slot="RB"):
+    return [WeeklyPerformance(week=i + 1, points=points_each, slot=slot) for i in range(count)]
+
+
 def make_league():
     my_team = Team(espn_id=1, name="My Team", is_mine=True, wins=8, losses=6, final_standing=5)
     other_team = Team(espn_id=2, name="Other Team", is_mine=False, wins=7, losses=7, final_standing=6)
@@ -43,14 +47,25 @@ def make_league():
             round_pick=1,
             team_espn_id=1,
             team_name="My Team",
-            player=Player(espn_id=10, name="Star Bust", position="RB", total_points=50),
+            player=Player(
+                espn_id=10, name="Star Bust", position="RB", total_points=50, weekly=weekly(10, 5.0)
+            ),
         ),
         DraftPick(
             round_num=10,
             round_pick=5,
             team_espn_id=1,
             team_name="My Team",
-            player=Player(espn_id=11, name="Late Steal", position="WR", total_points=200),
+            player=Player(
+                espn_id=11, name="Late Steal", position="WR", total_points=200, weekly=weekly(10, 20.0, slot="WR")
+            ),
+        ),
+        DraftPick(
+            round_num=3,
+            round_pick=1,
+            team_espn_id=1,
+            team_name="My Team",
+            player=Player(espn_id=13, name="Never Started", position="", total_points=0, weekly=[]),
         ),
         DraftPick(
             round_num=2,
@@ -72,7 +87,7 @@ def test_get_retrospective_filters_to_my_picks_and_sorts_by_round():
 
     assert result.team_name == "My Team"
     assert result.wins == 8
-    assert [p.player.name for p in result.picks] == ["Star Bust", "Late Steal"]
+    assert [p.player.name for p in result.picks] == ["Star Bust", "Never Started", "Late Steal"]
     assert result.narrative == "a narrative"
 
 
@@ -90,7 +105,7 @@ def test_get_retrospective_raises_when_no_team_is_mine():
         service.get_retrospective(2025)
 
 
-def test_narrative_prompt_includes_picks_and_points():
+def test_narrative_prompt_includes_rate_and_weeks_started():
     league = make_league()
     llm = FakeLLM()
     service = RetrospectiveService(FakeStore({"league_2025": league}), llm)
@@ -99,8 +114,53 @@ def test_narrative_prompt_includes_picks_and_points():
 
     user_content = llm.last_messages[1]["content"]
     assert "Star Bust" in user_content
+    assert "5.0 pts/week" in user_content
     assert "Late Steal" in user_content
-    assert "200" in user_content
+    assert "20.0 pts/week" in user_content
+    assert "Never Started" in user_content
+    assert "production on this roster is unknown" in user_content
+
+
+def test_pick_line_with_weekly_data_shows_rate_and_weeks_started():
+    pick = DraftPick(
+        round_num=1,
+        round_pick=1,
+        team_espn_id=1,
+        team_name="My Team",
+        player=Player(espn_id=1, name="X", position="RB", total_points=100, weekly=weekly(10, 10.0)),
+    )
+    line = _pick_line(pick)
+    assert "on roster 10 of the season's weeks" in line
+    assert "started 10 of them" in line
+    assert "10.0 pts/week" in line
+
+
+def test_pick_line_excludes_benched_weeks_from_started_count():
+    started = weekly(5, 10.0, slot="RB")
+    benched = weekly(3, 0.0, slot="BE")
+    pick = DraftPick(
+        round_num=1,
+        round_pick=1,
+        team_espn_id=1,
+        team_name="My Team",
+        player=Player(espn_id=1, name="X", position="RB", total_points=50, weekly=started + benched),
+    )
+    line = _pick_line(pick)
+    assert "on roster 8 of the season's weeks" in line
+    assert "started 5 of them" in line
+
+
+def test_pick_line_never_on_roster():
+    pick = DraftPick(
+        round_num=1,
+        round_pick=1,
+        team_espn_id=1,
+        team_name="My Team",
+        player=Player(espn_id=1, name="X", position="", total_points=0, weekly=[]),
+    )
+    line = _pick_line(pick)
+    assert "never appeared in a weekly lineup" in line
+    assert "production on this roster is unknown" in line
 
 
 def test_get_retrospective_caches_result_after_first_computation():
