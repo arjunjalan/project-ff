@@ -47,4 +47,5 @@ class OpenRouterAdapter(LLMAdapter):
         if not response.choices or not response.choices[0].message.content:
             finish_reason = repr(response.choices[0].finish_reason) if response.choices else "no choices"
             raise ValueError(f"Empty response from model {model} (finish_reason={finish_reason})")
+        logger.info("OpenRouter request to %s served by %s", model, response.model)
         return LLMResult(text=response.choices[0].message.content)

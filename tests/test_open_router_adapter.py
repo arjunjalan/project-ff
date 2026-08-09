@@ -7,10 +7,10 @@ from openai import APIStatusError
 from app.adapters.open_router import OpenRouterAdapter
 
 
-def fake_response(content="hi"):
+def fake_response(content="hi", model="test/model"):
     message = SimpleNamespace(content=content)
     choice = SimpleNamespace(message=message, finish_reason="stop")
-    return SimpleNamespace(choices=[choice])
+    return SimpleNamespace(choices=[choice], model=model)
 
 
 def fake_status_error(status_code: int) -> APIStatusError:
@@ -75,3 +75,15 @@ def test_chat_raises_when_fallback_also_returns_empty():
 
     with pytest.raises(ValueError):
         adapter.chat([{"role": "user", "content": "hi"}])
+
+
+def test_chat_logs_which_model_actually_served_the_request(caplog):
+    adapter = make_adapter()
+    adapter._client.chat.completions.create = MagicMock(
+        return_value=fake_response("hello", model="openai/gpt-5.6-sol")
+    )
+
+    with caplog.at_level("INFO"):
+        adapter.chat([{"role": "user", "content": "hi"}])
+
+    assert "openai/gpt-5.6-sol" in caplog.text
