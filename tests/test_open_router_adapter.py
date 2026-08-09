@@ -55,3 +55,23 @@ def test_chat_reraises_non_billing_errors():
 
     with pytest.raises(APIStatusError):
         adapter.chat([{"role": "user", "content": "hi"}])
+
+
+def test_chat_falls_back_on_empty_response():
+    adapter = make_adapter()
+    adapter._client.chat.completions.create = MagicMock(
+        side_effect=[fake_response(content=None), fake_response("fallback reply")]
+    )
+
+    result = adapter.chat([{"role": "user", "content": "hi"}])
+
+    assert result.text == "fallback reply"
+    assert adapter._client.chat.completions.create.call_count == 2
+
+
+def test_chat_raises_when_fallback_also_returns_empty():
+    adapter = make_adapter()
+    adapter._client.chat.completions.create = MagicMock(return_value=fake_response(content=None))
+
+    with pytest.raises(ValueError):
+        adapter.chat([{"role": "user", "content": "hi"}])

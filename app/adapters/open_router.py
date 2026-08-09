@@ -7,6 +7,10 @@ from app.adapters.llm import LLMAdapter, LLMResult
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://openrouter.ai/api/v1"
+# Generous: some free models (e.g. gpt-oss-20b) spend hidden reasoning tokens
+# out of this same budget before writing the visible answer, and reject
+# attempts to disable reasoning outright.
+_MAX_TOKENS = 8192
 
 # 402 = insufficient credits; 403 = OpenRouter key-level spend limit hit.
 # Both mean "can't use a paid model right now" — fall back rather than fail.
@@ -22,14 +26,13 @@ class OpenRouterAdapter(LLMAdapter):
     def chat(self, messages: list[dict]) -> LLMResult:
         try:
             return self._chat_with(self._model, messages)
-        except APIStatusError as e:
-            if e.status_code not in _BILLING_BLOCKED_STATUS_CODES:
+        except (APIStatusError, ValueError) as e:
+            if isinstance(e, APIStatusError) and e.status_code not in _BILLING_BLOCKED_STATUS_CODES:
                 raise
             logger.warning(
-                "OpenRouter model %s blocked (HTTP %d: %s), falling back to %s",
+                "OpenRouter model %s failed (%s), falling back to %s",
                 self._model,
-                e.status_code,
-                e.message,
+                e,
                 self._fallback_model,
             )
             return self._chat_with(self._fallback_model, messages)
@@ -39,7 +42,7 @@ class OpenRouterAdapter(LLMAdapter):
         response = self._client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=2048,
+            max_tokens=_MAX_TOKENS,
         )
         if not response.choices or not response.choices[0].message.content:
             finish_reason = repr(response.choices[0].finish_reason) if response.choices else "no choices"

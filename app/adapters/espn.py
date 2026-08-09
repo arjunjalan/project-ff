@@ -16,7 +16,7 @@ class EspnAdapter:
             espn_s2=self._espn_s2,
             swid=self._swid,
         )
-        teams = [_to_team(t) for t in client.teams]
+        teams = [_to_team(t, self._swid) for t in client.teams]
         # BasePick only carries playerId/playerName, not position — backfill
         # from current rosters (misses players since traded/dropped/retired).
         player_lookup = {p.espn_id: p for t in teams for p in t.roster}
@@ -35,15 +35,18 @@ def _to_player(espn_player) -> Player:
         name=espn_player.name,
         position=espn_player.position,
         pro_team=getattr(espn_player, "proTeam", None),
+        total_points=getattr(espn_player, "total_points", 0),
     )
 
 
-def _to_team(espn_team) -> Team:
+def _to_team(espn_team, swid: str) -> Team:
     owner = espn_team.owners[0].get("displayName") if espn_team.owners else None
+    is_mine = any(str(o.get("id", "")).upper() == swid.upper() for o in espn_team.owners)
     return Team(
         espn_id=espn_team.team_id,
         name=espn_team.team_name,
         owner=owner,
+        is_mine=is_mine,
         division_name=espn_team.division_name or None,
         wins=espn_team.wins,
         losses=espn_team.losses,

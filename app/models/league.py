@@ -6,6 +6,10 @@ class Player(BaseModel):
     name: str
     position: str
     pro_team: str | None = None
+    # 0 for a drafted player traded/dropped off the roster before season end
+    # (backfilled from final rosters — see EspnAdapter), not necessarily 0
+    # points actually scored. Don't read this as "this pick was a bust."
+    total_points: float = 0
 
 
 class DraftPick(BaseModel):
@@ -20,6 +24,7 @@ class Team(BaseModel):
     espn_id: int
     name: str
     owner: str | None = None
+    is_mine: bool = False
     division_name: str | None = None
     wins: int
     losses: int

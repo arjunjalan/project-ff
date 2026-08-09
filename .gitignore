@@ -220,3 +220,6 @@ __marimo__/
 # project-ff: local JSON persistence (personal league data, per ADR 001)
 /data/*
 !/data/.gitkeep
+
+# project-ff: scratch folder for manually pasted league data (personal, not for git)
+/.input/

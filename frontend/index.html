@@ -15,6 +15,9 @@
     .item .reason { color: #555; font-size: 0.9em; }
     .badge { font-size: 0.75em; padding: 0.1rem 0.4rem; border-radius: 3px; background: #eee; }
     .badge.material { background: #c0392b; color: white; }
+    .pick-table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.9em; }
+    .pick-table th, .pick-table td { text-align: left; padding: 0.25rem 0.5rem; border-bottom: 1px solid #eee; }
+    .narrative { background: #f4f4f4; padding: 1rem; margin-top: 1rem; white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -33,6 +36,13 @@
   <p>Materiality-filtered NFL news — reasoning shown for every call.</p>
   <button id="load-feed">Load feed</button>
   <div id="feed"></div>
+
+  <hr />
+
+  <h2>Season retrospective</h2>
+  <p>Your actual draft picks vs. how they scored, with reasoning.</p>
+  <button id="load-retro">Load retrospective</button>
+  <div id="retro"></div>
 
   <script>
     const statusEl = document.getElementById("status");
@@ -82,6 +92,42 @@
           .join("");
       } catch (e) {
         feedEl.textContent = "Error: " + e;
+      }
+    });
+
+    const retroEl = document.getElementById("retro");
+
+    document.getElementById("load-retro").addEventListener("click", async () => {
+      retroEl.textContent = "loading…";
+      try {
+        const r = await fetch(`/retrospective/${yearEl.value}`);
+        if (!r.ok) {
+          const err = await r.json();
+          retroEl.textContent = "Error: " + err.detail;
+          return;
+        }
+        const retro = await r.json();
+        const rows = retro.picks
+          .map(
+            (p) => `
+          <tr>
+            <td>R${p.round_num}.${p.round_pick}</td>
+            <td>${p.player.name}</td>
+            <td>${p.player.position}</td>
+            <td>${p.player.total_points}</td>
+          </tr>`
+          )
+          .join("");
+        retroEl.innerHTML = `
+          <p><strong>${retro.team_name}</strong> — ${retro.wins}-${retro.losses}, final standing ${retro.final_standing}</p>
+          <table class="pick-table">
+            <tr><th>Pick</th><th>Player</th><th>Pos</th><th>Points</th></tr>
+            ${rows}
+          </table>
+          <div class="narrative">${retro.narrative}</div>
+        `;
+      } catch (e) {
+        retroEl.textContent = "Error: " + e;
       }
     });
   </script>
