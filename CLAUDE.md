@@ -32,7 +32,7 @@ project-ff/
 │   ├── services/     # Business logic (orchestrates adapters + storage)
 │   ├── adapters/      # External provider wrappers (EspnAdapter normalizes espn-api → our models)
 │   ├── models/         # Pydantic domain models (League, Team, Player, DraftPick, Transaction) — also the persistence shape
-│   ├── storage/         # JsonStore — local JSON read/write
+│   ├── storage/         # Store (ABC) + JsonStore — local JSON read/write
 │   ├── config.py         # pydantic-settings Settings, reads .env
 │   ├── dependencies.py    # FastAPI DI wiring (adapter + store → service)
 │   └── main.py             # FastAPI app entry point
@@ -48,6 +48,7 @@ project-ff/
 
 1. **Adapter-first** — all ESPN access sits behind `EspnAdapter`. Routers/services never touch `espn_api` directly.
 2. **Models double as persistence shape** — no separate ORM layer, so Pydantic models in `app/models/` are both the API contract and what gets written to JSON. Split them only if/when that stops being true.
+2a. **Keep the Postgres/Supabase migration path open, without building it now.** JSON files are the intentional v1 choice, but services/routers depend on `Store` (the ABC in `app/storage/store.py`), never on `JsonStore` directly — only `app/dependencies.py` knows the concrete type. If H5's state ever outgrows flat files, the swap is: add `app/storage/sql_store.py` implementing `Store` against Postgres (Supabase is free at this scale, per bookshelf), point `dependencies.py` at it, done — no service or router changes. Don't add SQLAlchemy models, migrations, or Docker preemptively; the point is that the seam exists, not that it's used yet.
 3. **Four independent subsystems** (Research, Strategy, Live Draft Helper, Season Management), not one monolithic agent — each matched to its own reliability needs. The live draft helper especially must stay simple and bulletproof.
 4. **Secrets in env vars only** — nothing sensitive committed; this matters more than usual since the repo is public.
 5. **Explainability by design** — recommendations should surface reasoning/sources, not just a final answer.

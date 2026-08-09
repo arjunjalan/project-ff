@@ -2,8 +2,10 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from app.storage.store import Store
 
-class JsonStore:
+
+class JsonStore(Store):
     def __init__(self, data_dir: str):
         self._data_dir = Path(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)

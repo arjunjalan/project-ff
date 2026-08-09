@@ -1,10 +1,10 @@
 from app.adapters.espn import EspnAdapter
 from app.models.league import League
-from app.storage.json_store import JsonStore
+from app.storage.store import Store
 
 
 class LeagueService:
-    def __init__(self, adapter: EspnAdapter, store: JsonStore):
+    def __init__(self, adapter: EspnAdapter, store: Store):
         self._adapter = adapter
         self._store = store
 
