@@ -29,6 +29,11 @@ class RetrospectiveService:
         self._llm = llm
 
     def get_retrospective(self, year: int) -> TeamRetrospective | None:
+        cache_key = f"retrospective_{year}"
+        cached = self._store.load(cache_key, TeamRetrospective)
+        if cached is not None:
+            return cached
+
         league = self._store.load(f"league_{year}", League)
         if league is None:
             return None
@@ -44,7 +49,7 @@ class RetrospectiveService:
 
         narrative = self._narrate(my_team, my_picks)
 
-        return TeamRetrospective(
+        retrospective = TeamRetrospective(
             team_name=my_team.name,
             year=year,
             wins=my_team.wins,
@@ -53,6 +58,8 @@ class RetrospectiveService:
             picks=my_picks,
             narrative=narrative,
         )
+        self._store.save(cache_key, retrospective)
+        return retrospective
 
     def _narrate(self, team: Team, picks: list[DraftPick]) -> str:
         if not picks:

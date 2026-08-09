@@ -2,28 +2,36 @@ import pytest
 
 from app.adapters.llm import LLMAdapter, LLMResult
 from app.models.league import DraftPick, League, Player, Team
+from app.models.retrospective import TeamRetrospective
 from app.services.retrospective_service import RetrospectiveService
 
 
 class FakeStore:
-    def __init__(self, leagues: dict[str, League]):
-        self._leagues = leagues
+    def __init__(self, data: dict[str, object] | None = None):
+        self._data = dict(data or {})
 
     def save(self, key, model):
-        raise AssertionError("retrospective service should not write")
+        self._data[key] = model
 
     def load(self, key, model_cls):
-        return self._leagues.get(key)
+        return self._data.get(key)
 
 
 class FakeLLM(LLMAdapter):
     def __init__(self, text="a narrative"):
         self._text = text
         self.last_messages = None
+        self.call_count = 0
 
     def chat(self, messages):
+        self.call_count += 1
         self.last_messages = messages
         return LLMResult(text=self._text)
+
+
+class ExplodingLLM(LLMAdapter):
+    def chat(self, messages):
+        raise AssertionError("LLM should not be called when a cached retrospective exists")
 
 
 def make_league():
@@ -69,7 +77,7 @@ def test_get_retrospective_filters_to_my_picks_and_sorts_by_round():
 
 
 def test_get_retrospective_returns_none_when_no_synced_data():
-    service = RetrospectiveService(FakeStore({}), FakeLLM())
+    service = RetrospectiveService(FakeStore(), FakeLLM())
     assert service.get_retrospective(2025) is None
 
 
@@ -93,3 +101,42 @@ def test_narrative_prompt_includes_picks_and_points():
     assert "Star Bust" in user_content
     assert "Late Steal" in user_content
     assert "200" in user_content
+
+
+def test_get_retrospective_caches_result_after_first_computation():
+    league = make_league()
+    store = FakeStore({"league_2025": league})
+    llm = FakeLLM()
+    service = RetrospectiveService(store, llm)
+
+    service.get_retrospective(2025)
+
+    cached = store.load("retrospective_2025", TeamRetrospective)
+    assert cached is not None
+    assert cached.team_name == "My Team"
+    assert llm.call_count == 1
+
+
+def test_get_retrospective_uses_cache_and_never_calls_llm():
+    cached = TeamRetrospective(
+        team_name="My Team", year=2025, wins=8, losses=6, final_standing=5, picks=[], narrative="cached narrative"
+    )
+    store = FakeStore({"retrospective_2025": cached})
+    service = RetrospectiveService(store, ExplodingLLM())
+
+    result = service.get_retrospective(2025)
+
+    assert result.narrative == "cached narrative"
+
+
+def test_get_retrospective_second_call_hits_cache_not_llm():
+    league = make_league()
+    store = FakeStore({"league_2025": league})
+    llm = FakeLLM()
+    service = RetrospectiveService(store, llm)
+
+    first = service.get_retrospective(2025)
+    second = service.get_retrospective(2025)
+
+    assert first == second
+    assert llm.call_count == 1
