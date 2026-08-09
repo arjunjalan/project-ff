@@ -15,3 +15,7 @@ class TeamRetrospective(BaseModel):
     # own LLM call used — passed through as-is to StrategyService so it isn't
     # working from a lossy re-summary of a summary.
     position_breakdown: list[str] = []
+    # Season waiver/free-agent activity for this team (executed adds/drops,
+    # FAAB spent, standout pickups) — see EspnAdapter._fetch_transactions.
+    # Empty for years synced before transaction capture landed.
+    transaction_summary: list[str] = []

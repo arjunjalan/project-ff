@@ -3,10 +3,13 @@ from types import SimpleNamespace
 from app.adapters.espn import (
     _enrich_with_weekly_performance,
     _fetch_positional_rankings,
+    _fetch_transactions,
     _to_draft_pick,
     _to_league_settings,
     _to_player,
     _to_team,
+    _to_transaction,
+    _to_transaction_item,
 )
 from app.models.league import Player
 
@@ -198,6 +201,90 @@ def test_enrich_continues_past_a_week_that_errors():
 
     assert lookup[10].total_points == 5.0
     assert [w.week for w in lookup[10].weekly] == [2]
+
+
+def fake_txn_item(player_id, action="ADD", name="Waiver Guy"):
+    return SimpleNamespace(type=action, playerId=player_id, player=name)
+
+
+def fake_transaction(team_id=1, team_name="Giovanni's Grand Team", type_="WAIVER", status="EXECUTED", items=None):
+    return SimpleNamespace(
+        type=type_,
+        status=status,
+        team=SimpleNamespace(team_id=team_id, team_name=team_name),
+        scoring_period=3,
+        date=1234567890,
+        bid_amount=15,
+        items=items or [fake_txn_item(10, "ADD"), fake_txn_item(20, "DROP", name="Dropped Guy")],
+    )
+
+
+def test_to_transaction_item_backfills_from_lookup():
+    lookup = {10: Player(espn_id=10, name="Bijan Robinson", position="RB", pro_team="ATL")}
+    item = _to_transaction_item(fake_txn_item(10, "ADD"), player_lookup=lookup)
+    assert item.action == "ADD"
+    assert item.player.position == "RB"
+    assert item.player.pro_team == "ATL"
+
+
+def test_to_transaction_item_falls_back_when_not_in_lookup():
+    item = _to_transaction_item(fake_txn_item(99, "DROP", name="Departed Guy"), player_lookup={})
+    assert item.action == "DROP"
+    assert item.player.name == "Departed Guy"
+    assert item.player.position == ""
+
+
+def test_to_transaction_maps_fields_and_items():
+    lookup = {10: Player(espn_id=10, name="Bijan Robinson", position="RB")}
+    txn = _to_transaction(fake_transaction(), player_lookup=lookup)
+    assert txn.type == "WAIVER"
+    assert txn.status == "EXECUTED"
+    assert txn.team_espn_id == 1
+    assert txn.team_name == "Giovanni's Grand Team"
+    assert txn.scoring_period == 3
+    assert txn.date_epoch_ms == 1234567890
+    assert txn.bid_amount == 15
+    assert [i.action for i in txn.items] == ["ADD", "DROP"]
+    assert txn.items[0].player.position == "RB"
+
+
+def test_to_transaction_defaults_bid_amount_when_none():
+    espn_txn = fake_transaction()
+    espn_txn.bid_amount = None
+    txn = _to_transaction(espn_txn, player_lookup={})
+    assert txn.bid_amount == 0
+
+
+def fake_transactions_client(final_week, txns_by_week):
+    def transactions(scoring_period, types):
+        return txns_by_week.get(scoring_period, [])
+
+    return SimpleNamespace(finalScoringPeriod=final_week, transactions=transactions)
+
+
+def test_fetch_transactions_iterates_all_weeks_and_flattens():
+    client = fake_transactions_client(
+        3,
+        {
+            1: [fake_transaction(team_id=1)],
+            2: [],
+            3: [fake_transaction(team_id=2, team_name="Other Team"), fake_transaction(team_id=1)],
+        },
+    )
+    result = _fetch_transactions(client, player_lookup={})
+    assert len(result) == 3
+    assert [t.team_espn_id for t in result] == [1, 2, 1]
+
+
+def test_fetch_transactions_continues_past_a_week_that_errors():
+    def transactions(scoring_period, types):
+        if scoring_period == 1:
+            raise RuntimeError("ESPN hiccup")
+        return [fake_transaction()]
+
+    client = SimpleNamespace(finalScoringPeriod=2, transactions=transactions)
+    result = _fetch_transactions(client, player_lookup={})
+    assert len(result) == 1
 
 
 def fake_player_row(espn_id, name, points, stat_id="002025"):

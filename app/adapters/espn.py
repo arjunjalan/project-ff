@@ -3,7 +3,17 @@ import logging
 
 from espn_api.football import League as EspnLeagueClient
 
-from app.models.league import DraftPick, League, LeagueSettings, Player, PositionRanking, Team, WeeklyPerformance
+from app.models.league import (
+    DraftPick,
+    League,
+    LeagueSettings,
+    Player,
+    PositionRanking,
+    Team,
+    Transaction,
+    TransactionItem,
+    WeeklyPerformance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +22,12 @@ logger = logging.getLogger(__name__)
 # player pool by position via the same authenticated request client espn-api
 # itself uses (not a scraped/undocumented path).
 _POSITION_SLOT_IDS = {"QB": 0, "RB": 2, "WR": 4, "TE": 6, "D/ST": 16, "K": 17}
+
+# Waiver/free-agent claims and completed trades — the actual roster-move
+# history. Excludes DRAFT (covered separately), in-progress trade
+# negotiation states (PROPOSAL/VETO/UPHOLD/DECLINE), and ROSTER/
+# FUTURE_ROSTER/RETRO_ROSTER (lineup-slot bookkeeping, not adds/drops).
+_TRANSACTION_TYPES = {"WAIVER", "WAIVER_ERROR", "FREEAGENT", "TRADE_ACCEPT"}
 
 
 class EspnAdapter:
@@ -44,6 +60,7 @@ class EspnAdapter:
             name=client.settings.name,
             teams=teams,
             draft=[_to_draft_pick(p, player_lookup) for p in client.draft],
+            transactions=_fetch_transactions(client, player_lookup),
             settings=_to_league_settings(client.settings),
             positional_rankings=_fetch_positional_rankings(client, year),
         )
@@ -139,6 +156,53 @@ def _fetch_positional_rankings(client, year: int) -> dict[str, list[PositionRank
         ]
 
     return result
+
+
+def _fetch_transactions(client, player_lookup: dict[int, Player]) -> list[Transaction]:
+    """All waiver/free-agent/trade transactions for the season, across every team.
+
+    ESPN scopes this endpoint per scoring period (week), so it's fetched one
+    week at a time up to the league's final scoring period — which includes
+    playoff weeks, not just the regular season (waiver activity doesn't stop
+    once the regular season ends). Confirmed to work for past seasons: this
+    is a different endpoint (mTransactions2) than recent_activity()'s
+    kona_league_communication view, which 202s empty for historical seasons
+    (see issue #1) — recent_activity() being broken does not mean
+    transaction history is unavailable.
+    """
+    final_week = getattr(client, "finalScoringPeriod", 0) or 0
+    transactions: list[Transaction] = []
+    for week in range(1, final_week + 1):
+        try:
+            week_txns = client.transactions(scoring_period=week, types=_TRANSACTION_TYPES)
+        except Exception:
+            logger.warning("Failed to fetch transactions for week %d", week, exc_info=True)
+            continue
+        transactions.extend(_to_transaction(t, player_lookup) for t in week_txns)
+    return transactions
+
+
+def _to_transaction(espn_txn, player_lookup: dict[int, Player]) -> Transaction:
+    return Transaction(
+        type=espn_txn.type,
+        status=espn_txn.status,
+        team_espn_id=espn_txn.team.team_id,
+        team_name=espn_txn.team.team_name,
+        scoring_period=espn_txn.scoring_period,
+        date_epoch_ms=espn_txn.date,
+        bid_amount=espn_txn.bid_amount or 0,
+        items=[_to_transaction_item(i, player_lookup) for i in espn_txn.items],
+    )
+
+
+def _to_transaction_item(espn_item, player_lookup: dict[int, Player]) -> TransactionItem:
+    player = player_lookup.get(espn_item.playerId) or Player(
+        espn_id=espn_item.playerId,
+        name=espn_item.player,
+        position="",
+        pro_team=None,
+    )
+    return TransactionItem(action=espn_item.type, player=player)
 
 
 def _enrich_with_weekly_performance(client, my_team_espn_id: int, player_lookup: dict[int, Player]) -> None:

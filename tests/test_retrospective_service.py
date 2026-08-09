@@ -1,7 +1,17 @@
 import pytest
 
 from app.adapters.llm import LLMAdapter, LLMResult
-from app.models.league import DraftPick, League, LeagueSettings, Player, PositionRanking, Team, WeeklyPerformance
+from app.models.league import (
+    DraftPick,
+    League,
+    LeagueSettings,
+    Player,
+    PositionRanking,
+    Team,
+    Transaction,
+    TransactionItem,
+    WeeklyPerformance,
+)
 from app.models.retrospective import TeamRetrospective
 from app.services.retrospective_service import (
     RetrospectiveService,
@@ -9,6 +19,7 @@ from app.services.retrospective_service import (
     _pick_line,
     _position_breakdown,
     _tier_line,
+    _transaction_summary,
 )
 
 
@@ -289,6 +300,144 @@ def test_position_breakdown_handles_zero_started_weeks_without_division_error():
     ]
     lines = _position_breakdown(picks)
     assert "WR: 1 pick(s), 0.0 pts total, 0 started-weeks, ~0.0 pts/started-week" in lines[0]
+
+
+def txn(team_espn_id=1, type_="WAIVER", status="EXECUTED", bid_amount=0, items=None):
+    return Transaction(
+        type=type_,
+        status=status,
+        team_espn_id=team_espn_id,
+        team_name="My Team",
+        scoring_period=1,
+        date_epoch_ms=1000,
+        bid_amount=bid_amount,
+        items=items or [],
+    )
+
+
+def test_transaction_summary_counts_executed_adds_drops_and_faab():
+    my_team = Team(espn_id=1, name="My Team", is_mine=True, wins=8, losses=6)
+    transactions = [
+        txn(
+            bid_amount=15,
+            items=[
+                TransactionItem(action="ADD", player=Player(espn_id=1, name="Add1", position="RB")),
+                TransactionItem(action="DROP", player=Player(espn_id=2, name="Drop1", position="WR")),
+            ],
+        ),
+        txn(type_="FREEAGENT", items=[TransactionItem(action="ADD", player=Player(espn_id=3, name="Add2", position="TE"))]),
+        txn(status="FAILED_ROSTERLOCK", bid_amount=99, items=[]),  # excluded — not executed
+        txn(team_espn_id=2, bid_amount=50, items=[]),  # excluded — other team
+    ]
+    lines = _transaction_summary(my_team, transactions)
+    assert "2 executed moves this season: 2 unique players added, 1 drops, $15 FAAB spent" in lines[0]
+
+
+def test_transaction_summary_empty_when_no_executed_transactions():
+    my_team = Team(espn_id=1, name="My Team", is_mine=True, wins=8, losses=6)
+    lines = _transaction_summary(my_team, [txn(status="FAILED_ROSTERLOCK")])
+    assert lines == []
+
+
+def test_transaction_summary_lists_notable_pickups_by_points_desc():
+    my_team = Team(espn_id=1, name="My Team", is_mine=True, wins=8, losses=6)
+    transactions = [
+        txn(
+            items=[
+                TransactionItem(
+                    action="ADD",
+                    player=Player(espn_id=1, name="Low Add", position="RB", total_points=10, weekly=weekly(5, 2.0)),
+                )
+            ]
+        ),
+        txn(
+            items=[
+                TransactionItem(
+                    action="ADD",
+                    player=Player(espn_id=2, name="High Add", position="WR", total_points=80, weekly=weekly(8, 10.0)),
+                )
+            ]
+        ),
+        txn(items=[TransactionItem(action="ADD", player=Player(espn_id=3, name="Never Started", position="TE"))]),
+    ]
+    lines = _transaction_summary(my_team, transactions)
+    pickup_lines = [l for l in lines if l.startswith("Notable pickup")]
+    assert len(pickup_lines) == 2  # "Never Started" excluded — no weekly data
+    assert pickup_lines[0].startswith("Notable pickup: High Add")
+    assert pickup_lines[1].startswith("Notable pickup: Low Add")
+
+
+def test_transaction_summary_dedupes_a_player_added_more_than_once():
+    my_team = Team(espn_id=1, name="My Team", is_mine=True, wins=8, losses=6)
+    player = Player(espn_id=1, name="Re-added Guy", position="RB", weekly=weekly(3, 10.0))
+    transactions = [
+        txn(items=[TransactionItem(action="ADD", player=player)]),
+        txn(items=[TransactionItem(action="ADD", player=player)]),
+    ]
+    lines = _transaction_summary(my_team, transactions)
+    assert "1 unique players added" in lines[0]
+    assert len([l for l in lines if l.startswith("Notable pickup")]) == 1
+
+
+def test_transaction_summary_flags_bench_stash_separately_from_notable():
+    my_team = Team(espn_id=1, name="My Team", is_mine=True, wins=8, losses=6)
+    # Mostly benched (7 weeks) at a high rate, started only 2 weeks — the
+    # Drake Maye case: a good pickup that was barely played, not accurately
+    # described by a raw season total next to a "started weeks" count. This
+    # is reported as a fact ("Bench stash"), not judged as a mistake — see
+    # Arjun's pushback on the original "Underused pickup" framing.
+    mostly_benched = weekly(2, 20.0, slot="QB") + weekly(7, 18.0, slot="BE")
+    player = Player(espn_id=1, name="Bench Riser", position="QB", weekly=mostly_benched)
+    lines = _transaction_summary(my_team, [txn(items=[TransactionItem(action="ADD", player=player)])])
+
+    notable = [l for l in lines if l.startswith("Notable pickup")]
+    stashed = [l for l in lines if l.startswith("Bench stash")]
+    assert len(notable) == 1  # started_points (40.0) > 0, still listed
+    assert len(stashed) == 1
+    assert "Bench Riser" in stashed[0]
+    assert "started only 2 of 9 weeks" in stashed[0]
+    assert "18.0 pts/week while benched" in stashed[0]
+    assert "mistake" not in stashed[0] and "miss" not in stashed[0]
+
+
+def test_transaction_summary_does_not_flag_bench_stash_when_bench_rate_is_low():
+    my_team = Team(espn_id=1, name="My Team", is_mine=True, wins=8, losses=6)
+    # Mostly benched, but low-production bench weeks — not a real signal.
+    low_bench = weekly(1, 10.0, slot="RB") + weekly(5, 2.0, slot="BE")
+    player = Player(espn_id=1, name="Scrub", position="RB", weekly=low_bench)
+    lines = _transaction_summary(my_team, [txn(items=[TransactionItem(action="ADD", player=player)])])
+
+    assert not [l for l in lines if l.startswith("Bench stash")]
+
+
+def test_narrative_prompt_includes_transaction_summary_when_present():
+    league = make_league()
+    league.transactions = [
+        txn(
+            bid_amount=20,
+            items=[TransactionItem(action="ADD", player=Player(espn_id=99, name="Waiver Pickup", position="RB"))],
+        )
+    ]
+    llm = FakeLLM()
+    service = RetrospectiveService(FakeStore({"league_2025": league}), llm)
+
+    service.get_retrospective(2025)
+
+    user_content = llm.last_messages[1]["content"]
+    assert "Season waiver-wire activity" in user_content
+    assert "1 executed moves this season: 1 unique players added" in user_content
+
+
+def test_narrative_prompt_omits_transaction_section_when_no_transactions():
+    league = make_league()
+    assert league.transactions == []
+    llm = FakeLLM()
+    service = RetrospectiveService(FakeStore({"league_2025": league}), llm)
+
+    service.get_retrospective(2025)
+
+    user_content = llm.last_messages[1]["content"]
+    assert "Season waiver-wire activity" not in user_content
 
 
 def draft_pick(espn_id, position, weekly_data=None, total_points=0, round_num=1, round_pick=1):

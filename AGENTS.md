@@ -70,7 +70,7 @@ project-ff/
 
 ## Known Constraints
 
-- **ESPN transaction history (adds/drops/trades) is not reliably queryable for past seasons** — confirmed via `scripts/spike_historical_data.py` (see issue #1 comment). Draft, roster, and standings history all work fine. H3's retrospective should lean on those, not on transaction-level history, unless this gets re-verified.
+- **`League.recent_activity()` (espn-api) does not work for past seasons** — it calls the `kona_league_communication` endpoint, which 202s empty for historical years (confirmed via `scripts/spike_historical_data.py`, see issue #1 comment). This does **not** mean transaction history is unavailable: `League.transactions(scoring_period, types)` uses a different endpoint (`mTransactions2`) and *does* work for past seasons — confirmed live for 2025 (491 real transactions recovered across the season). `EspnAdapter._fetch_transactions` uses this method; see issue #7/#11.
 
 ---
 

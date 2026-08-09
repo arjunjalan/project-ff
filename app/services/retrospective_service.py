@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 from app.adapters.llm import LLMAdapter
-from app.models.league import DraftPick, League, PositionRanking, Team
+from app.models.league import DraftPick, League, PositionRanking, Team, Transaction
 from app.models.retrospective import TeamRetrospective
 from app.services.league_settings_summary import summarize_settings
 from app.storage.store import Store
@@ -55,6 +55,18 @@ rate, aggregated across every pick at that position). Use it to discuss roster c
 directly — e.g. whether points returned per position roughly matched the draft capital \
 invested there.
 
+You may also get a season waiver-wire activity summary (executed adds/drops, FAAB spent, any \
+standout free-agent pickups). If given, weave a brief comment about it into the roster-\
+construction picture — e.g. a free-agent pickup that outproduced a bench draft pick is a real \
+signal about in-season management, separate from draft quality. A "Bench stash" line means a \
+good waiver add that mostly sat on the bench — report this as a fact, not a verdict. Do NOT \
+call it a mistake or mismanagement: rostering a strong backup behind an established starter, \
+especially at a scarce/thin position, is often a deliberate insurance or scarcity play (protects \
+against the starter's bye/injury, denies a good player to rivals), not an oversight. If you \
+mention it, frame it as "X was stashed behind Y" or similar, and it's fine to note the plausible \
+strategic rationale rather than assuming it was wasted. Don't invent activity beyond what's \
+listed, and don't force a comment if the summary is empty or unremarkable.
+
 Write a short retrospective (6-8 sentences) that:
 - Leads with which starting roles cleared their tier bar and which didn't, naming the roles \
 specifically (e.g. "QB cleared comfortably, WR2 missed badly").
@@ -98,7 +110,10 @@ class RetrospectiveService:
         )
 
         position_breakdown = _position_breakdown(my_picks) if my_picks else []
-        narrative = self._narrate(my_team, my_picks, league.settings, position_breakdown, league.positional_rankings)
+        transaction_summary = _transaction_summary(my_team, league.transactions)
+        narrative = self._narrate(
+            my_team, my_picks, league.settings, position_breakdown, league.positional_rankings, transaction_summary
+        )
 
         retrospective = TeamRetrospective(
             team_name=my_team.name,
@@ -109,6 +124,7 @@ class RetrospectiveService:
             picks=my_picks,
             narrative=narrative,
             position_breakdown=position_breakdown,
+            transaction_summary=transaction_summary,
         )
         self._store.save(cache_key, retrospective)
         return retrospective
@@ -120,6 +136,7 @@ class RetrospectiveService:
         settings,
         position_breakdown: list[str],
         positional_rankings: dict[str, list[PositionRanking]],
+        transaction_summary: list[str],
     ) -> str:
         if not picks:
             return "No draft picks found for this team in the synced data."
@@ -144,6 +161,10 @@ class RetrospectiveService:
 
         lines.append("\nPosition breakdown (aggregated across all picks at that position):")
         lines.extend(position_breakdown)
+
+        if transaction_summary:
+            lines.append("\nSeason waiver-wire activity:")
+            lines.extend(transaction_summary)
 
         result = self._llm.chat(
             [
@@ -184,6 +205,96 @@ def _position_breakdown(picks: list[DraftPick]) -> list[str]:
             f"{position}: {len(group_picks)} pick(s), {total_points:.1f} pts total, "
             f"{weeks_started} started-weeks, ~{rate:.1f} pts/started-week"
         )
+    return lines
+
+
+# Floor for flagging a "bench stash" worth surfacing at all — not just scrub
+# production that happened to accumulate on the bench (e.g. a single
+# 6-point flex-eligible bench week isn't a real signal, a sustained double-
+# digit rate is).
+_UNDERUSED_BENCH_RATE_FLOOR = 10.0
+
+
+def _transaction_summary(team: Team, transactions: list[Transaction]) -> list[str]:
+    """Season-long waiver/free-agent activity for one team: executed move
+    counts, FAAB spent, standout pickups, and "bench stash" pickups that
+    produced well but were rarely started. Empty transactions means either
+    an unsynced/pre-#11 dataset or genuinely no activity — either way
+    there's nothing useful to say.
+
+    Points are always split by started vs. benched weeks. Mixing the two
+    (e.g. a raw season total next to a "started weeks" count) misrepresents
+    a player who mostly sat the bench as a highly efficient starter — a real
+    bug caught by Arjun spot-checking Drake Maye's numbers: his 162.9-point
+    season total looked like a great return over "2 started weeks" (~81
+    pts/week), but 7 of his 9 weeks on the roster were actually spent on the
+    bench, most of them scoring 15-27 points unstarted.
+
+    Deliberately doesn't call this a "mistake": Arjun pushed back on that
+    framing directly — a strong QB2 sat behind an elite QB1 can be
+    legitimate insurance (bye/injury) or a deliberate scarcity play (deny a
+    good backup to rivals in a shallow-QB league), not necessarily a missed
+    start. The data can't distinguish those cases from an actual oversight,
+    so it's reported as a fact for the LLM (and Arjun) to interpret, not a
+    verdict.
+    """
+    executed = [t for t in transactions if t.team_espn_id == team.espn_id and t.status == "EXECUTED"]
+    if not executed:
+        return []
+
+    # A player added more than once (add/drop/re-add) should only be
+    # reported once — weekly data covers their whole tenure on this roster
+    # regardless of which transaction it's attached to.
+    adds_by_player = {}
+    drop_count = 0
+    for t in executed:
+        for i in t.items:
+            if i.action == "ADD":
+                adds_by_player[i.player.espn_id] = i.player
+            elif i.action == "DROP":
+                drop_count += 1
+    faab_spent = sum(t.bid_amount for t in executed if t.type == "WAIVER")
+
+    lines = [
+        f"{len(executed)} executed moves this season: {len(adds_by_player)} unique players added, "
+        f"{drop_count} drops, ${faab_spent:.0f} FAAB spent"
+    ]
+
+    stats = []
+    for player in adds_by_player.values():
+        if not player.weekly:
+            continue
+        started = [w for w in player.weekly if w.slot not in _BENCH_SLOTS]
+        benched = [w for w in player.weekly if w.slot in _BENCH_SLOTS]
+        stats.append(
+            (
+                player,
+                len(started),
+                len(benched),
+                sum(w.points for w in started),
+                sum(w.points for w in benched),
+            )
+        )
+
+    productive = sorted((s for s in stats if s[3] > 0), key=lambda s: -s[3])
+    for player, weeks_started, _weeks_benched, started_points, _benched_points in productive[:3]:
+        lines.append(
+            f"Notable pickup: {player.name} ({player.position}) — {started_points:.1f} pts "
+            f"across {weeks_started} started weeks after being added"
+        )
+
+    underused = sorted(
+        (s for s in stats if s[2] > s[1] and s[2] > 0 and (s[4] / s[2]) >= _UNDERUSED_BENCH_RATE_FLOOR),
+        key=lambda s: -s[4],
+    )
+    for player, weeks_started, weeks_benched, _started_points, benched_points in underused[:2]:
+        bench_rate = benched_points / weeks_benched
+        lines.append(
+            f"Bench stash: {player.name} ({player.position}) — added but started only "
+            f"{weeks_started} of {weeks_started + weeks_benched} weeks on the roster despite averaging "
+            f"{bench_rate:.1f} pts/week while benched"
+        )
+
     return lines
 
 

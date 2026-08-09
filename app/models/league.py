@@ -51,13 +51,24 @@ class Team(BaseModel):
     roster: list[Player] = []
 
 
+class TransactionItem(BaseModel):
+    action: str  # "ADD" or "DROP"
+    player: Player
+
+
 class Transaction(BaseModel):
-    # Placeholder for H5 — the historical feed this shape was modeled on
-    # isn't reliably queryable (see scripts/spike_historical_data.py);
-    # unverified against the current-season feed.
-    type: str
+    # Confirmed queryable for past seasons via espn-api's League.transactions()
+    # (mTransactions2 view) — a different endpoint than recent_activity()'s
+    # kona_league_communication view, which IS broken for historical seasons
+    # (see issue #1). See EspnAdapter._fetch_transactions.
+    type: str  # "WAIVER", "FREEAGENT", "WAIVER_ERROR", "TRADE_ACCEPT"
+    status: str  # e.g. "EXECUTED", "FAILED_ROSTERLOCK", "CANCELED"
     team_espn_id: int
-    player: Player | None = None
+    team_name: str
+    scoring_period: int
+    date_epoch_ms: int
+    bid_amount: float = 0
+    items: list[TransactionItem] = []
 
 
 class LeagueSettings(BaseModel):
@@ -85,6 +96,7 @@ class League(BaseModel):
     name: str
     teams: list[Team]
     draft: list[DraftPick] = []
+    transactions: list[Transaction] = []
     settings: LeagueSettings | None = None
     # Keyed by position ("QB", "RB", "WR", "TE", "D/ST", "K") — see EspnAdapter.
     positional_rankings: dict[str, list[PositionRanking]] = {}
