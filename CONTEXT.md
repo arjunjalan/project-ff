@@ -45,6 +45,11 @@ H4 (live draft helper) is still the hard deadline — Sep 3, 2026 — and is uns
 
 ## Session Notes
 
+### 2026-08-09 — Retrospective caching fix (commit `ca3ecef`) + local server running for Arjun to test
+- `RetrospectiveService.get_retrospective()` was calling the LLM fresh on every request, even though a closed season's data never changes. Fixed: checks the store for a `retrospective_{year}` cache key first, only computes and persists on a miss. No new endpoint — same `GET /retrospective/{year}`, just fast after the first call. To force a redo, delete `data/retrospective_{year}.json`.
+- Same non-caching pattern exists in `StrategyService` (re-runs retrospective + research feed + synthesis every call) — left as-is since the strategy brief is legitimately meant to reflect *current* news, unlike the retrospective. Flagged here in case Arjun wants that revisited too; wasn't asked for this session.
+- Started `uv run uvicorn app.main:app --reload --port 8000` in the background (detached via `disown`, not tied to any single tool call) so Arjun can click through the frontend (`localhost:8000`) and Swagger UI (`localhost:8000/docs`) himself. Left running intentionally — don't kill it start-of-session; check `pgrep -f 'uvicorn app.main:app'` before assuming it's not there.
+
 ### 2026-08-09 — H3 epic closed; #7 un-deprioritized with new URL-based lead
 - Closed #3 (H3 epic) — its Status field on the project board doesn't auto-derive from sub-issue completion (GitHub has no such rollup), so it needed a manual update even though both #8 and #9 were already closed. Worth remembering: always check/close the parent epic explicitly after its last sub-story lands, don't assume it reflects automatically.
 - Arjun un-deprioritized #7 (previously parked in Backlog #10) with a concrete new lead: ESPN's fantasy web app has a `waiverreport` page (`fantasy.espn.com/football/league/waiverreport?leagueId=...&waiverDate=<epoch-ms>`) he can supply URLs for manually. Split into #11 (2025 backfill, feeds H3-S1) and #12 (ongoing 2026 capture, feeds H5).
