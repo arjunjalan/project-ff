@@ -1,6 +1,7 @@
 from app.adapters.llm import LLMAdapter
-from app.models.league import League, LeagueSettings
+from app.models.league import League
 from app.models.strategy import StrategyBrief
+from app.services.league_settings_summary import summarize_settings
 from app.services.research_service import ResearchService
 from app.services.retrospective_service import RetrospectiveService
 from app.storage.store import Store
@@ -16,6 +17,11 @@ Write a short strategy brief (5-8 sentences) that:
 generic advice that ignores the settings given.
 - If a retrospective is provided, explicitly carries forward 1-2 lessons from it (e.g. \
 "last year you drafted RBs too early relative to how they scored — this year...").
+- If the scoring format changed between last season and this one (flagged explicitly in \
+the input if so), say plainly which retrospective lessons about position value still \
+apply and which don't transfer directly — e.g. a non-PPR-to-PPR change raises WR/pass-\
+catcher value, so "avoid early WRs" from a non-PPR retrospective needs re-checking, not \
+blind carry-forward.
 - If current news is provided, names any player/situation from it worth targeting or \
 avoiding, citing the specific news item.
 - If retrospective or news data is missing or thin, say so plainly rather than inventing \
@@ -40,22 +46,28 @@ class StrategyService:
         if league is None or league.settings is None:
             return None
 
-        settings_summary = _summarize_settings(league.settings)
+        settings_summary = summarize_settings(league.settings)
 
         try:
             retro = self._retrospective_service.get_retrospective(year - 1)
         except ValueError:
             retro = None
 
+        prior_league = self._store.load(f"league_{year - 1}", League)
+        scoring_change_note = _scoring_change_note(prior_league, league)
+
         news = self._research_service.get_materiality_feed(limit=15)
         material_news = [a for a in news if a.material]
 
-        narrative = self._synthesize(settings_summary, retro, material_news)
+        narrative = self._synthesize(settings_summary, retro, material_news, scoring_change_note)
 
         return StrategyBrief(year=year, league_settings_summary=settings_summary, narrative=narrative)
 
-    def _synthesize(self, settings_summary, retro, material_news) -> str:
-        lines = [f"League settings: {settings_summary}"]
+    def _synthesize(self, settings_summary, retro, material_news, scoring_change_note) -> str:
+        lines = [f"This season's league settings: {settings_summary}"]
+
+        if scoring_change_note:
+            lines.append(f"\nSCORING FORMAT CHANGE: {scoring_change_note}")
 
         if retro is not None:
             lines.append(f"\nLast season's retrospective ({retro.team_name}, {retro.wins}-{retro.losses}):")
@@ -79,10 +91,14 @@ class StrategyService:
         return result.text
 
 
-def _summarize_settings(s: LeagueSettings) -> str:
-    starters = {k: v for k, v in s.position_slot_counts.items() if k not in ("BE", "IR")}
-    starters_str = ", ".join(f"{v} {k}" for k, v in starters.items())
-    return (
-        f"{s.team_count}-team {s.scoring_type}, {s.points_per_reception} pt/reception, "
-        f"starters: {starters_str}, playoff teams: {s.playoff_team_count}, keepers: {s.keeper_count}"
-    )
+def _scoring_change_note(prior_league: League | None, current_league: League) -> str | None:
+    if prior_league is None or prior_league.settings is None or current_league.settings is None:
+        return None
+    prior = prior_league.settings
+    current = current_league.settings
+    if prior.points_per_reception != current.points_per_reception:
+        return (
+            f"points-per-reception changed from {prior.points_per_reception} "
+            f"({prior_league.year}) to {current.points_per_reception} ({current_league.year})."
+        )
+    return None

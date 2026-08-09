@@ -1,17 +1,23 @@
 from app.adapters.llm import LLMAdapter
 from app.models.league import DraftPick, League, Team
 from app.models.retrospective import TeamRetrospective
+from app.services.league_settings_summary import summarize_settings
 from app.storage.store import Store
 
 _BENCH_SLOTS = {"BE", "IR"}
 
 _SYSTEM_PROMPT = """You're a fantasy football advisor helping a manager learn from last \
-season's draft. For each pick you'll get: round/pick, player, position, how many weeks of \
-the season they were on this specific roster, how many of those weeks they were started \
-(not benched/IR), their total points while on this roster, and their points-per-week rate \
-while started. Some picks are marked as never having appeared in a weekly lineup for this \
-team — for those, production on this roster is genuinely unknown; do not guess, do not call \
-them a bust, just note the pick and move on.
+season's draft. You'll get that season's actual scoring rules (e.g. PPR or not) — interpret \
+every pick's production in light of those rules, not generic assumptions. For example, a \
+receiver's total looks very different under non-PPR than PPR; don't judge a pick as weak \
+just because a receiver-type player scored low if the league was non-PPR that season.
+
+For each pick you'll get: round/pick, player, position, how many weeks of the season they \
+were on this specific roster, how many of those weeks they were started (not benched/IR), \
+their total points while on this roster, and their points-per-week rate while started. Some \
+picks are marked as never having appeared in a weekly lineup for this team — for those, \
+production on this roster is genuinely unknown; do not guess, do not call them a bust, just \
+note the pick and move on.
 
 Write a short retrospective (4-6 sentences) that:
 - Judges value primarily by points-per-started-week rate, not season total — a full-season \
@@ -53,7 +59,7 @@ class RetrospectiveService:
             key=lambda p: (p.round_num, p.round_pick),
         )
 
-        narrative = self._narrate(my_team, my_picks)
+        narrative = self._narrate(my_team, my_picks, league.settings)
 
         retrospective = TeamRetrospective(
             team_name=my_team.name,
@@ -67,11 +73,13 @@ class RetrospectiveService:
         self._store.save(cache_key, retrospective)
         return retrospective
 
-    def _narrate(self, team: Team, picks: list[DraftPick]) -> str:
+    def _narrate(self, team: Team, picks: list[DraftPick], settings) -> str:
         if not picks:
             return "No draft picks found for this team in the synced data."
 
         lines = [f"Record: {team.wins}-{team.losses}, final standing {team.final_standing}"]
+        if settings is not None:
+            lines.append(f"Scoring rules that season: {summarize_settings(settings)}")
         for p in picks:
             lines.append(f"Round {p.round_num}, Pick {p.round_pick}: {p.player.name} ({p.player.position}) — {_pick_line(p)}")
         result = self._llm.chat(

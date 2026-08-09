@@ -1,7 +1,7 @@
 import pytest
 
 from app.adapters.llm import LLMAdapter, LLMResult
-from app.models.league import DraftPick, League, Player, Team, WeeklyPerformance
+from app.models.league import DraftPick, League, LeagueSettings, Player, Team, WeeklyPerformance
 from app.models.retrospective import TeamRetrospective
 from app.services.retrospective_service import RetrospectiveService, _pick_line
 
@@ -119,6 +119,38 @@ def test_narrative_prompt_includes_rate_and_weeks_started():
     assert "20.0 pts/week" in user_content
     assert "Never Started" in user_content
     assert "production on this roster is unknown" in user_content
+
+
+def test_narrative_prompt_includes_scoring_settings_when_available():
+    league = make_league()
+    league.settings = LeagueSettings(
+        team_count=10,
+        scoring_type="H2H_POINTS",
+        points_per_reception=0.0,
+        playoff_team_count=6,
+        keeper_count=0,
+        position_slot_counts={"QB": 1, "RB": 2, "WR": 2, "BE": 4},
+    )
+    llm = FakeLLM()
+    service = RetrospectiveService(FakeStore({"league_2025": league}), llm)
+
+    service.get_retrospective(2025)
+
+    user_content = llm.last_messages[1]["content"]
+    assert "Scoring rules that season" in user_content
+    assert "0.0 pt/reception" in user_content
+
+
+def test_narrative_prompt_omits_scoring_line_when_settings_missing():
+    league = make_league()
+    assert league.settings is None
+    llm = FakeLLM()
+    service = RetrospectiveService(FakeStore({"league_2025": league}), llm)
+
+    service.get_retrospective(2025)
+
+    user_content = llm.last_messages[1]["content"]
+    assert "Scoring rules that season" not in user_content
 
 
 def test_pick_line_with_weekly_data_shows_rate_and_weeks_started():

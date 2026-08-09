@@ -120,3 +120,66 @@ def test_get_strategy_handles_no_material_news():
     service.get_strategy(2026)
 
     assert "No current material news available" in llm.last_messages[1]["content"]
+
+
+def make_league(year, ppr, settings=True):
+    league_settings = (
+        LeagueSettings(
+            team_count=12,
+            scoring_type="H2H_POINTS",
+            points_per_reception=ppr,
+            playoff_team_count=6,
+            keeper_count=0,
+            position_slot_counts={"QB": 1, "RB": 2, "WR": 2, "BE": 4},
+        )
+        if settings
+        else None
+    )
+    return League(espn_id=1, year=year, name="Test League", teams=[], draft=[], settings=league_settings)
+
+
+def test_get_strategy_flags_scoring_format_change():
+    league_2026 = make_league(2026, ppr=1.0)
+    league_2025 = make_league(2025, ppr=0.0)
+    llm = FakeLLM()
+    service = StrategyService(
+        FakeStore({"league_2026": league_2026, "league_2025": league_2025}),
+        llm,
+        FakeRetrospectiveService(retro=make_retro()),
+        FakeResearchService(),
+    )
+
+    service.get_strategy(2026)
+
+    user_content = llm.last_messages[1]["content"]
+    assert "SCORING FORMAT CHANGE" in user_content
+    assert "0.0" in user_content and "1.0" in user_content
+    assert "2025" in user_content and "2026" in user_content
+
+
+def test_get_strategy_no_scoring_change_note_when_ppr_unchanged():
+    league_2026 = make_league(2026, ppr=1.0)
+    league_2025 = make_league(2025, ppr=1.0)
+    llm = FakeLLM()
+    service = StrategyService(
+        FakeStore({"league_2026": league_2026, "league_2025": league_2025}),
+        llm,
+        FakeRetrospectiveService(retro=make_retro()),
+        FakeResearchService(),
+    )
+
+    service.get_strategy(2026)
+
+    assert "SCORING FORMAT CHANGE" not in llm.last_messages[1]["content"]
+
+
+def test_get_strategy_no_scoring_change_note_when_prior_league_missing():
+    league_2026 = make_league(2026, ppr=1.0)
+    llm = FakeLLM()
+    service = StrategyService(
+        FakeStore({"league_2026": league_2026}), llm, FakeRetrospectiveService(retro=make_retro()), FakeResearchService()
+    )
+
+    service.get_strategy(2026)
+
+    assert "SCORING FORMAT CHANGE" not in llm.last_messages[1]["content"]
